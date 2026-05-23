@@ -112,3 +112,76 @@ export interface SharedDrive {
   size: string;
   membersCount: number;
 }
+
+export interface DistributorClient {
+  id: string;
+  name: string;
+  gst?: string;
+  contactEmail: string;
+  renewalDate: string;
+  totalLicenses: number;
+  activePlans: Partial<Record<Plan, number>>;
+  annualValue: number;
+  commissionRate: number;
+}
+
+export interface CommissionPayout {
+  id: string;
+  period: string;
+  invoiceAmount: number;
+  commissionRate: number;
+  commissionEarned: number;
+  status: 'paid' | 'pending' | 'processing';
+  paidDate?: string;
+}
+
+export interface RenewalInfo {
+  billingEntityId: string;
+  billingEntityName: string;
+  renewalDate: string;
+  daysUntilRenewal: number;
+  totalAmount: number;
+}
+
+export type AuditAction =
+  | 'user_created'
+  | 'user_suspended'
+  | 'user_reactivated'
+  | 'plan_changed'
+  | 'license_assigned'
+  | 'license_revoked'
+  | 'coupon_created'
+  | 'coupon_deleted'
+  | 'pricing_updated'
+  | 'referral_toggled'
+  | 'alert_resolved'
+  | 'invoice_generated'
+  | 'domain_added'
+  | 'export_downloaded';
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string;
+  actorName: string;
+  actorRole: Role;
+  action: AuditAction;
+  target: string;
+  detail: string;
+  timestamp: string;
+}
+
+export interface PlanConfig {
+  plan: 'basic' | 'pro' | 'enterprise' | 'premium';
+  name: string;
+  pricePerYear: number;
+  color: string;
+}
+
+export interface Coupon {
+  code: string;
+  discount: number;
+  type: 'percent' | 'flat';
+  label: string;
+  active: boolean;
+  usageCount: number;
+}
