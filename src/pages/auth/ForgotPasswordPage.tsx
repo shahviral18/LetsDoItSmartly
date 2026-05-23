@@ -96,3 +96,5 @@ export function ForgotPasswordPage() {
     </AuthCard>
   );
 }
+
+export default ForgotPasswordPage;

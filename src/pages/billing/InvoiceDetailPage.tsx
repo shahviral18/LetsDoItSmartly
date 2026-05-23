@@ -163,3 +163,5 @@ export function InvoiceDetailPage() {
     </div>
   );
 }
+
+export default InvoiceDetailPage;

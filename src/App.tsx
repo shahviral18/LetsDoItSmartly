@@ -1,100 +1,75 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
-import { GuestRoute } from './router/GuestRoute';
-import { ProtectedRoute } from './router/ProtectedRoute';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppShell } from './components/shell/AppShell';
-import { LoginPage } from './pages/auth/LoginPage';
-import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
-import { ForceResetPage } from './pages/auth/ForceResetPage';
-import { DashboardPage } from './pages/dashboards/DashboardPage';
-import { DomainDashboardPage } from './pages/domain/DomainDashboardPage';
-import { UsersPage } from './pages/users/UsersPage';
-import { UserDetailPage } from './pages/users/UserDetailPage';
-import { StoragePage } from './pages/users/StoragePage';
-import { SharedDrivesPage } from './pages/users/SharedDrivesPage';
-import { InvoicesPage } from './pages/billing/InvoicesPage';
-import { InvoiceDetailPage } from './pages/billing/InvoiceDetailPage';
-import { BuyLicensesPage } from './pages/billing/BuyLicensesPage';
-import { UpgradePlanPage } from './pages/billing/UpgradePlanPage';
-import { DistributorDashboardPage } from './pages/distributor/DistributorDashboardPage';
-import AdminLayout from './components/layout/AdminLayout';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import SuperAdminPanel from './pages/admin/SuperAdminPanel';
+import LoginPage from './pages/auth/LoginPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import ForceResetPage from './pages/auth/ForceResetPage';
+import DashboardPage from './pages/dashboards/DashboardPage';
+import UsersPage from './pages/users/UsersPage';
+import UserDetailPage from './pages/users/UserDetailPage';
+import DomainDashboardPage from './pages/domain/DomainDashboardPage';
+import StoragePage from './pages/users/StoragePage';
+import SharedDrivesPage from './pages/users/SharedDrivesPage';
+import BuyLicensesPage from './pages/billing/BuyLicensesPage';
+import InvoicesPage from './pages/billing/InvoicesPage';
+import InvoiceDetailPage from './pages/billing/InvoiceDetailPage';
+import UpgradePlanPage from './pages/billing/UpgradePlanPage';
 import SecurityAlertsPage from './pages/admin/SecurityAlertsPage';
 import LoginHistoryPage from './pages/admin/LoginHistoryPage';
 import AuditLogPage from './pages/admin/AuditLogPage';
+import SuperAdminPanel from './pages/admin/SuperAdminPanel';
+import DistributorDashboardPage from './pages/distributor/DistributorDashboardPage';
 import BackofficePage from './pages/admin/BackofficePage';
 
-export default function App() {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  return user ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+function GuestRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  return !user ? <>{children}</> : <Navigate to="/dashboard" replace />;
+}
+
+function AppRoutes() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          {/* Public auth routes — redirect away if already logged in */}
-          <Route element={<GuestRoute />}>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          </Route>
+    <Routes>
+      <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
+      <Route path="/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />
+      <Route path="/force-reset" element={<ForceResetPage />} />
 
-          {/* Force reset — accessible only when status === force_reset */}
-          <Route path="/force-reset" element={<ForceResetPage />} />
+      <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/users" element={<UsersPage />} />
+        <Route path="/users/:id" element={<UserDetailPage />} />
+        <Route path="/domains" element={<DomainDashboardPage />} />
+        <Route path="/storage" element={<StoragePage />} />
+        <Route path="/shared-drives" element={<SharedDrivesPage />} />
+        <Route path="/billing/buy" element={<BuyLicensesPage />} />
+        <Route path="/billing/invoices" element={<InvoicesPage />} />
+        <Route path="/billing/invoices/:id" element={<InvoiceDetailPage />} />
+        <Route path="/billing/upgrade" element={<UpgradePlanPage />} />
+        <Route path="/security/alerts" element={<SecurityAlertsPage />} />
+        <Route path="/security/logins" element={<LoginHistoryPage />} />
+        <Route path="/security/audit" element={<AuditLogPage />} />
+        <Route path="/admin/super" element={<SuperAdminPanel />} />
+        <Route path="/admin/coupons" element={<SuperAdminPanel />} />
+        <Route path="/distributor/clients" element={<DistributorDashboardPage />} />
+        <Route path="/distributors" element={<BackofficePage />} />
+      </Route>
 
-          {/* Protected app routes */}
-          <Route element={<ProtectedRoute />}>
-            <Route element={<AppShell />}>
-              <Route path="/app/dashboard" element={<DashboardPage />} />
-              {/* Track 2 — User & Domain Management */}
-              <Route path="/app/domain-dashboard" element={<DomainDashboardPage />} />
-              <Route path="/app/users" element={<UsersPage />} />
-              <Route path="/app/users/:userId" element={<UserDetailPage />} />
-              <Route path="/app/storage" element={<StoragePage />} />
-              <Route path="/app/drives" element={<SharedDrivesPage />} />
-              {/* Billing & Payments — Track 3 */}
-              <Route path="/app/invoices" element={<InvoicesPage />} />
-              <Route path="/app/invoices/:id" element={<InvoiceDetailPage />} />
-              <Route path="/app/buy-licenses" element={<BuyLicensesPage />} />
-              <Route path="/app/upgrade-plan" element={<UpgradePlanPage />} />
-              {/* Distributor */}
-              <Route path="/app/distributor" element={<DistributorDashboardPage />} />
-              {/* Stub routes — content built in later tracks */}
-              <Route path="/app/billing" element={<StubPage title="Billing Entities" />} />
-              <Route path="/app/security" element={<StubPage title="Security" />} />
-              <Route path="/app/support" element={<StubPage title="Support Queue" />} />
-              <Route path="/app/audit" element={<StubPage title="Audit Log" />} />
-              <Route path="/app/reports" element={<StubPage title="Reports" />} />
-              <Route path="/app/domains" element={<StubPage title="Domains" />} />
-              <Route path="/app/settings" element={<StubPage title="Settings" />} />
-            </Route>
-
-            {/* Track 4 — Admin & Audit */}
-            <Route path="/admin" element={<AdminLayout />}>
-              <Route index element={<SuperAdminPanel />} />
-              <Route path="security-alerts" element={<SecurityAlertsPage />} />
-              <Route path="login-history" element={<LoginHistoryPage />} />
-              <Route path="audit-log" element={<AuditLogPage />} />
-              <Route path="backoffice" element={<BackofficePage />} />
-              <Route path="dashboard" element={<AdminDashboard />} />
-            </Route>
-          </Route>
-
-          {/* Default redirect */}
-          <Route path="/" element={<Navigate to="/login" replace />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
   );
 }
 
-function StubPage({ title }: { title: string }) {
+export default function App() {
   return (
-    <div className="flex flex-col items-center justify-center h-64 text-center">
-      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
-        style={{ background: '#F0F7FF' }}>
-        <span className="text-2xl">🚧</span>
-      </div>
-      <h2 className="text-lg font-semibold text-slate-700">{title}</h2>
-      <p className="text-sm text-slate-400 mt-1">This section will be built in a future track.</p>
-    </div>
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
   );
 }

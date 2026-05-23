@@ -271,3 +271,5 @@ function InfoRow({ label, value, valueColor = 'text-slate-800' }: { label: strin
     </div>
   );
 }
+
+export default UserDetailPage;

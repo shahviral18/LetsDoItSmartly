@@ -208,3 +208,5 @@ export function DistributorDashboardPage() {
     </div>
   );
 }
+
+export default DistributorDashboardPage;

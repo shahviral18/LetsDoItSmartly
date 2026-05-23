@@ -133,3 +133,5 @@ function MembersDrawer({ drive, onClose }: { drive: SharedDrive; onClose: () => 
     </div>
   );
 }
+
+export default SharedDrivesPage;

@@ -228,3 +228,5 @@ export function UpgradePlanPage() {
     </div>
   );
 }
+
+export default UpgradePlanPage;

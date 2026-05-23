@@ -287,3 +287,5 @@ export function BuyLicensesPage() {
     </div>
   );
 }
+
+export default BuyLicensesPage;

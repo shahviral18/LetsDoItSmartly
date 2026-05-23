@@ -215,3 +215,5 @@ function FilterSelect({ value, onChange, options }: {
     </div>
   );
 }
+
+export default UsersPage;
