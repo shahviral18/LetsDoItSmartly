@@ -29,6 +29,10 @@ const typeLabel: Record<string, string> = {
   new_device:          'New Device',
   stale_account:       'Stale Account',
   account_suspended:   'Suspended',
+  never_logged_in:     'Never Logged In',
+  storage_critical:    'Storage Critical',
+  storage_warning:     'Storage Warning',
+  new_unverified:      'Pending Activation',
 };
 
 export default function SecurityAlertsPage() {

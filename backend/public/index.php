@@ -111,11 +111,19 @@ $router->get('/api/dashboard/stats', function (Request $req) {
         $poolMap[$k]['plans'][] = ['slug' => $p['plan_slug'], 'allocated' => (int)$p['allocated'], 'used' => (int)$p['used']];
     }
 
+    $storageRow = Database::queryOne(
+        "SELECT COALESCE(SUM(wu.storage_used_mb),0) AS mb, COUNT(*) AS n
+         FROM workspace_users wu WHERE wu.status = 'active' $beFilter",
+        $beParams
+    );
+
     Response::json([
         'totalUsers' => $totalUsers, 'activeUsers' => $activeUsers,
         'totalDomains' => $totalDomains, 'totalBillingEntities' => $totalBe,
         'pendingInvoices' => $pendingInv, 'totalRevenue' => $totalRev,
         'unresolved2svUsers' => $no2sv,
+        'totalStorageMb' => (int)($storageRow['mb'] ?? 0),
+        'totalStorageUsers' => (int)($storageRow['n'] ?? 0),
         'licensePools' => array_values($poolMap),
     ]);
 }, $auth);
@@ -287,7 +295,8 @@ $router->get('/api/security/alerts', function (Request $req) {
     $rows = Database::query(
         "SELECT wu.id, CONCAT(wu.first_name,' ',wu.last_name) AS user_name,
                 wu.email, d.name AS domain_name, wu.status,
-                wu.two_sv_enabled, wu.last_login_at, wu.created_at
+                wu.two_sv_enabled, wu.last_login_at, wu.created_at,
+                wu.storage_used_mb, wu.storage_total_mb, wu.created_via_portal
          FROM workspace_users wu
          JOIN domains d ON d.id = wu.domain_id
          WHERE wu.status != 'deleted' $beFilter
@@ -297,50 +306,64 @@ $router->get('/api/security/alerts', function (Request $req) {
 
     $alerts = [];
     foreach ($rows as $r) {
-        // 2SV disabled on active accounts → Medium
-        if ($r['status'] === 'active' && !(int)$r['two_sv_enabled']) {
-            $alerts[] = [
-                'id'        => '2sv_' . $r['id'],
-                'user_name' => $r['user_name'],
-                'email'     => $r['email'],
-                'domain'    => $r['domain_name'],
-                'type'      => '2sv_disabled',
-                'severity'  => 'medium',
-                'message'   => '2-Step Verification is disabled',
-                'resolved'  => false,
-                'timestamp' => $r['created_at'],
-            ];
-        }
-        // No login in 90+ days → Low
-        if ($r['last_login_at'] && $r['status'] === 'active') {
-            $daysSince = (int) floor((time() - strtotime($r['last_login_at'])) / 86400);
-            if ($daysSince >= 90) {
-                $alerts[] = [
-                    'id'        => 'stale_' . $r['id'],
-                    'user_name' => $r['user_name'],
-                    'email'     => $r['email'],
-                    'domain'    => $r['domain_name'],
-                    'type'      => 'stale_account',
-                    'severity'  => 'low',
-                    'message'   => "No login in {$daysSince} days",
-                    'resolved'  => false,
-                    'timestamp' => $r['last_login_at'],
-                ];
+        $name  = $r['user_name'];
+        $email = $r['email'];
+        $dom   = $r['domain_name'];
+        $ts    = $r['created_at'];
+
+        // Never logged in (active, created > 7 days ago) → High
+        if ($r['status'] === 'active' && !$r['last_login_at']) {
+            $age = (int) floor((time() - strtotime($r['created_at'])) / 86400);
+            if ($age >= 7) {
+                $alerts[] = ['id'=>'never_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                    'type'=>'never_logged_in','severity'=>'high',
+                    'message'=>"Account active {$age} days, never logged in",'resolved'=>false,'timestamp'=>$ts];
             }
         }
-        // Suspended accounts → High (may need attention)
+
+        // Storage critical ≥90% → High
+        if ((int)$r['storage_total_mb'] > 0) {
+            $pct = round((int)$r['storage_used_mb'] / (int)$r['storage_total_mb'] * 100);
+            if ($pct >= 90) {
+                $alerts[] = ['id'=>'stcrit_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                    'type'=>'storage_critical','severity'=>'high',
+                    'message'=>"Storage {$pct}% full",'resolved'=>false,'timestamp'=>$ts];
+            } elseif ($pct >= 75) {
+                $alerts[] = ['id'=>'stwarn_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                    'type'=>'storage_warning','severity'=>'medium',
+                    'message'=>"Storage {$pct}% used",'resolved'=>false,'timestamp'=>$ts];
+            }
+        }
+
+        // 2SV disabled on active accounts → Medium
+        if ($r['status'] === 'active' && !(int)$r['two_sv_enabled']) {
+            $alerts[] = ['id'=>'2sv_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                'type'=>'2sv_disabled','severity'=>'medium',
+                'message'=>'2-Step Verification is disabled','resolved'=>false,'timestamp'=>$ts];
+        }
+
+        // Suspended accounts → High
         if ($r['status'] === 'suspended') {
-            $alerts[] = [
-                'id'        => 'susp_' . $r['id'],
-                'user_name' => $r['user_name'],
-                'email'     => $r['email'],
-                'domain'    => $r['domain_name'],
-                'type'      => 'account_suspended',
-                'severity'  => 'high',
-                'message'   => 'Account is suspended',
-                'resolved'  => false,
-                'timestamp' => $r['created_at'],
-            ];
+            $alerts[] = ['id'=>'susp_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                'type'=>'account_suspended','severity'=>'high',
+                'message'=>'Account is suspended','resolved'=>false,'timestamp'=>$ts];
+        }
+
+        // No login in 60+ days → Low
+        if ($r['last_login_at'] && $r['status'] === 'active') {
+            $days = (int) floor((time() - strtotime($r['last_login_at'])) / 86400);
+            if ($days >= 60) {
+                $alerts[] = ['id'=>'stale_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                    'type'=>'stale_account','severity'=>'low',
+                    'message'=>"No login in {$days} days",'resolved'=>false,'timestamp'=>$r['last_login_at']];
+            }
+        }
+
+        // Pending portal account (created via portal, never activated) → Low
+        if ((int)$r['created_via_portal'] && $r['status'] === 'pending') {
+            $alerts[] = ['id'=>'pend_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                'type'=>'new_unverified','severity'=>'low',
+                'message'=>'Account pending activation','resolved'=>false,'timestamp'=>$ts];
         }
     }
 

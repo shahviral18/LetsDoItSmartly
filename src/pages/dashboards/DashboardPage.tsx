@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Users, Globe, CreditCard, AlertTriangle, TrendingUp, Building2, Loader2 } from "lucide-react";
+import { Users, Globe, CreditCard, AlertTriangle, TrendingUp, Building2, Loader2, HardDrive } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../lib/api";
 
@@ -14,6 +14,8 @@ interface Stats {
   pendingInvoices: number;
   totalRevenue: number;
   unresolved2svUsers: number;
+  totalStorageMb: number;
+  totalStorageUsers: number;
   licensePools: { name: string; slug: string; plans: { slug: string; allocated: number; used: number }[] }[];
 }
 
@@ -62,11 +64,12 @@ export default function DashboardPage() {
         <p className="text-sm text-muted-foreground mt-0.5">Here's what's happening across your email solution today.</p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <StatCard icon={Users} label="Total Users" value={stats?.totalUsers ?? 0} sub={`${stats?.activeUsers ?? 0} active`} color="bg-primary/10 text-primary" delay={0} />
         <StatCard icon={Globe} label="Active Domains" value={stats?.totalDomains ?? 0} sub={`${stats?.totalBillingEntities ?? 0} billing entities`} color="bg-success/10 text-success" delay={0.05} />
         <StatCard icon={AlertTriangle} label="2SV Disabled" value={stats?.unresolved2svUsers ?? 0} sub="Users at risk" color="bg-danger/10 text-danger" delay={0.1} />
         <StatCard icon={CreditCard} label="Pending Invoices" value={stats?.pendingInvoices ?? 0} sub={`₹${(stats?.totalRevenue ?? 0).toLocaleString('en-IN')} collected`} color="bg-warning/10 text-warning" delay={0.15} />
+        <StatCard icon={HardDrive} label="Storage Used" value={fmtStorage(stats?.totalStorageMb ?? 0)} sub={`across ${stats?.totalStorageUsers ?? 0} users`} color="bg-indigo-500/10 text-indigo-500" delay={0.2} />
       </div>
 
       {/* License pools */}
@@ -105,6 +108,13 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+}
+
+function fmtStorage(mb: number): string {
+  if (!mb) return '0 MB';
+  if (mb >= 1024 * 1024) return `${(mb / 1024 / 1024).toFixed(1)} TB`;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb} MB`;
 }
 
 function getGreeting() {

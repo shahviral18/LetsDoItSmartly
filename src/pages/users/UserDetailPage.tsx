@@ -32,6 +32,8 @@ interface ApiUser {
   storage_total_mb: number;
   ou_path?: string;
   created_at?: string;
+  google_created_at?: string;
+  created_via_portal?: number;
   deletion_requested_at?: string;
 }
 
@@ -181,10 +183,25 @@ export function UserDetailPage() {
             <InfoRow label="Domain" value={user.domain_name} />
             <InfoRow label="Plan" value={user.plan_slug.charAt(0).toUpperCase() + user.plan_slug.slice(1)} />
             <InfoRow label="OU Path" value={user.ou_path ?? '—'} />
-            <InfoRow label="Created" value={formatShortDate(user.created_at)} />
-            <InfoRow label="Last Login" value={formatDate(user.last_login_at)} />
+            <InfoRow label="Account Source" value={user.created_via_portal ? 'Via Portal' : 'Synced from Google'} valueColor={user.created_via_portal ? 'text-blue-600' : 'text-slate-500'} />
+            <InfoRow label="Google Created" value={formatShortDate(user.google_created_at)} />
+            <InfoRow label="Last Login" value={user.last_login_at ? formatDate(user.last_login_at) : 'Never'} valueColor={!user.last_login_at ? 'text-red-500' : undefined} />
             <InfoRow label="2SV" value={user.two_sv_enabled ? 'Enabled ✓' : 'Disabled ✗'} valueColor={user.two_sv_enabled ? 'text-green-600' : 'text-red-500'} />
-            <InfoRow label="Storage" value={`${mbToGb(user.storage_used_mb)} / ${mbToGb(user.storage_total_mb)}`} />
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-500">Storage</span>
+                <span className="font-medium text-slate-700">{mbToGb(user.storage_used_mb)} / {mbToGb(user.storage_total_mb)}</span>
+              </div>
+              {user.storage_total_mb > 0 && (() => {
+                const pct = Math.min(100, Math.round(user.storage_used_mb / user.storage_total_mb * 100));
+                const color = pct >= 90 ? '#EF4444' : pct >= 75 ? '#F59E0B' : '#1A7DC4';
+                return (
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+                  </div>
+                );
+              })()}
+            </div>
             {isDeletedPending && user.deletion_requested_at && (
               <InfoRow
                 label="Deletion date"
