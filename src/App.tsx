@@ -24,12 +24,14 @@ import EmailSurveillancePage from './pages/surveillance/EmailSurveillancePage';
 import BccRequestDetailPage from './pages/surveillance/BccRequestDetailPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="w-6 h-6 border-2 border-[#1A7DC4] border-t-transparent rounded-full animate-spin" /></div>;
   return user ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
 function GuestRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return null;
   return !user ? <>{children}</> : <Navigate to="/dashboard" replace />;
 }
 
