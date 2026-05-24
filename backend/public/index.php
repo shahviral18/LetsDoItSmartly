@@ -374,6 +374,73 @@ $router->get('/api/security/alerts', function (Request $req) {
     Response::json(['data' => $alerts]);
 }, $auth);
 
+// ── Google Login History ──────────────────────────────────────────────────────
+$router->get('/api/google/users', function (Request $req) {
+    $role = $req->user['role'];
+    $beId = null;
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        $beId = $pu['billing_entity_id'] ?? null;
+    }
+    $beFilter = $beId ? 'AND wu.billing_entity_id = :be' : '';
+    $params   = $beId ? [':be' => $beId] : [];
+
+    $users = Database::query(
+        "SELECT wu.id, wu.first_name, wu.last_name, wu.email, wu.status,
+                wu.two_sv_enabled, wu.last_login_at, wu.plan_slug, d.name AS domain_name
+         FROM workspace_users wu
+         JOIN domains d ON d.id = wu.domain_id
+         WHERE wu.status != 'deleted' $beFilter
+         ORDER BY wu.email LIMIT 500",
+        $params
+    );
+    Response::json(['data' => $users]);
+}, $auth);
+
+$router->get('/api/google/login-history/:email', function (Request $req) {
+    $email = urldecode($req->params['email'] ?? '');
+    if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) Response::error('Invalid email', 400);
+
+    // Verify requester can access this user
+    $role = $req->user['role'];
+    $wu   = Database::queryOne(
+        'SELECT wu.billing_entity_id FROM workspace_users wu WHERE wu.email = :e',
+        [':e' => $email]
+    );
+    if (!$wu) Response::error('User not found', 404);
+
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        if ($pu['billing_entity_id'] !== $wu['billing_entity_id']) Response::error('Forbidden', 403);
+    }
+
+    $history = GoogleWorkspaceService::getLoginHistory($email, 10);
+    Response::json(['email' => $email, 'data' => $history]);
+}, $auth);
+
+$router->post('/api/google/sign-out/:email', function (Request $req) {
+    $email = urldecode($req->params['email'] ?? '');
+    if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) Response::error('Invalid email', 400);
+
+    // Verify requester can manage this user
+    $role = $req->user['role'];
+    $wu   = Database::queryOne(
+        'SELECT wu.billing_entity_id FROM workspace_users wu WHERE wu.email = :e',
+        [':e' => $email]
+    );
+    if (!$wu) Response::error('User not found', 404);
+
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        if ($pu['billing_entity_id'] !== $wu['billing_entity_id']) Response::error('Forbidden', 403);
+    }
+
+    GoogleWorkspaceService::signOutUser($email);
+    AuditService::log('GOOGLE_SIGN_OUT', $role === 'domain_owner' ? 'portal' : 'staff',
+        $req->user['userId'], '', $role, $email, 'Force signed out from all devices', $req->ip);
+    Response::json(['message' => "User $email signed out from all Google sessions."]);
+}, $auth);
+
 // ── Login History (from audit_log LOGIN entries) ───────────────────────────────
 $router->get('/api/security/login-history', function (Request $req) {
     $role = $req->user['role'];

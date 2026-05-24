@@ -17,6 +17,7 @@ import InvoiceDetailPage from './pages/billing/InvoiceDetailPage';
 import UpgradePlanPage from './pages/billing/UpgradePlanPage';
 import SecurityAlertsPage from './pages/admin/SecurityAlertsPage';
 import LoginHistoryPage from './pages/admin/LoginHistoryPage';
+import GoogleLoginHistoryPage from './pages/admin/GoogleLoginHistoryPage';
 import AuditLogPage from './pages/admin/AuditLogPage';
 import SuperAdminPanel from './pages/admin/SuperAdminPanel';
 import DistributorDashboardPage from './pages/distributor/DistributorDashboardPage';
@@ -56,6 +57,7 @@ function AppRoutes() {
         <Route path="/billing/upgrade" element={<UpgradePlanPage />} />
         <Route path="/security/alerts" element={<SecurityAlertsPage />} />
         <Route path="/security/logins" element={<LoginHistoryPage />} />
+        <Route path="/security/google-logins" element={<GoogleLoginHistoryPage />} />
         <Route path="/security/audit" element={<AuditLogPage />} />
         <Route path="/admin/super" element={<SuperAdminPanel />} />
         <Route path="/admin/coupons" element={<SuperAdminPanel />} />

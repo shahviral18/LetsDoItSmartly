@@ -23,7 +23,8 @@ const navGroups = [
   ]},
   { label: "SECURITY", items: [
     { label: "Security Alerts", href: "/security/alerts", icon: Bell, roles: ["super_admin","admin","support_admin","auditor","domain_owner"] },
-    { label: "Login History", href: "/security/logins", icon: Shield, roles: ["super_admin","admin","support_admin","auditor","domain_owner"] },
+    { label: "Portal Login History", href: "/security/logins", icon: Shield, roles: ["super_admin","admin","support_admin","auditor","domain_owner"] },
+    { label: "Google Login History", href: "/security/google-logins", icon: Globe, roles: ["super_admin","admin","support_admin","domain_owner"] },
     { label: "Audit Log", href: "/security/audit", icon: ScrollText, roles: ["super_admin","admin","auditor"] },
   ]},
   { label: "COMMERCIAL", items: [

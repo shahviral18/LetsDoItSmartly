@@ -19,6 +19,7 @@ class GoogleWorkspaceService
     private const SCOPES = [
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.orgunit',
+        'https://www.googleapis.com/auth/admin.directory.user.security',
     ];
     private const REPORTS_SCOPES = [
         'https://www.googleapis.com/auth/admin.reports.audit.readonly',
@@ -48,6 +49,17 @@ class GoogleWorkspaceService
         $client->setScopes(self::SCOPES);
         $client->setSubject(GOOGLE_ADMIN_EMAIL);
         return new Google_Service_Directory($client);
+    }
+
+    private static function getReportsService(): object
+    {
+        self::boot();
+        $client = new Google_Client();
+        $client->setApplicationName('LetsDoItSmartly');
+        $client->setAuthConfig(GOOGLE_CREDENTIALS);
+        $client->setScopes(self::REPORTS_SCOPES);
+        $client->setSubject(GOOGLE_ADMIN_EMAIL);
+        return new Google_Service_Reports($client);
     }
 
     private static function getDriveService(string $userEmail): object
@@ -362,6 +374,85 @@ class GoogleWorkspaceService
         } catch (Throwable $e) {
             Logger::error("[GWS] getSharedDrives FAILED → $email: " . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Fetch last N login events for a user from Google Reports API.
+     * Returns array of: timestamp, ip_address, event_name, is_suspicious
+     */
+    public static function getLoginHistory(string $email, int $maxResults = 10): array
+    {
+        try {
+            $reports  = self::getReportsService();
+            $params   = [
+                'userKey'    => $email,
+                'maxResults' => $maxResults,
+                'eventName'  => 'login_success',
+            ];
+            $result   = $reports->activities->listActivities('all', 'login', $params);
+            $events   = [];
+            foreach ($result->getItems() ?? [] as $item) {
+                $ts     = $item->getId()->getTime();
+                $params = $item->getParameters() ?? [];
+
+                $ip      = '';
+                $isSusp  = false;
+                $device  = '';
+                foreach ($params as $p) {
+                    if ($p->getName() === 'login_type')      $device  = (string) $p->getValue();
+                    if ($p->getName() === 'is_suspicious')   $isSusp  = (bool)   $p->getBoolValue();
+                }
+                // IP comes from actor.ipAddress
+                $ip = method_exists($item->getActor(), 'getIpAddress') ? (string)$item->getActor()->getIpAddress() : '';
+
+                $events[] = [
+                    'timestamp'    => $ts,
+                    'ip_address'   => $ip,
+                    'login_type'   => $device,
+                    'is_suspicious'=> $isSusp,
+                    'event_name'   => 'login_success',
+                ];
+            }
+            // Also fetch failed logins
+            $paramsFail = ['userKey' => $email, 'maxResults' => $maxResults, 'eventName' => 'login_failure'];
+            $resultFail = $reports->activities->listActivities('all', 'login', $paramsFail);
+            foreach ($resultFail->getItems() ?? [] as $item) {
+                $events[] = [
+                    'timestamp'    => $item->getId()->getTime(),
+                    'ip_address'   => '',
+                    'login_type'   => '',
+                    'is_suspicious'=> false,
+                    'event_name'   => 'login_failure',
+                ];
+            }
+            // Sort newest first
+            usort($events, fn($a, $b) => strcmp($b['timestamp'], $a['timestamp']));
+            return array_slice($events, 0, $maxResults);
+        } catch (Throwable $e) {
+            Logger::error("[GWS] getLoginHistory FAILED → $email: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Force sign out a user from all Google sessions on all devices.
+     * Requires admin.directory.user.security scope in domain-wide delegation.
+     */
+    public static function signOutUser(string $email): bool
+    {
+        if (!self::isManaged($email)) {
+            Logger::error("[GWS] signOutUser BLOCKED — $email is not managed");
+            return false;
+        }
+        try {
+            $service = self::getService();
+            $service->users->signOut($email);
+            Logger::info("[GWS] signOutUser OK → $email");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] signOutUser FAILED → $email: " . $e->getMessage());
+            throw $e;
         }
     }
 
