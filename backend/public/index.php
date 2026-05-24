@@ -94,7 +94,7 @@ $router->get('/api/dashboard/stats', function (Request $req) {
     // Staff-only: billing-wide totals
     $totalBe    = $beId ? 1 : (int) Database::queryOne('SELECT COUNT(*) AS n FROM billing_entities', [])['n'];
     $pendingInv = (int) Database::queryOne("SELECT COUNT(*) AS n FROM invoices WHERE status = 'pending' $invFilter", $beParams)['n'];
-    $totalRev   = (float) (Database::queryOne("SELECT COALESCE(SUM(amount),0) AS s FROM invoices WHERE status = 'paid' $invFilter", $beParams)['s'] ?? 0);
+    $totalRev   = (float) (Database::queryOne("SELECT COALESCE(SUM(total_amount),0) AS s FROM invoices WHERE status = 'paid' $invFilter", $beParams)['s'] ?? 0);
 
     // License pools
     $poolWhere = $beId ? 'WHERE lp.billing_entity_id = :be' : '';
@@ -272,6 +272,96 @@ $router->post('/api/admin/config', function (Request $req) {
     AuditService::log('CONFIG_UPDATED', 'staff', $req->user['userId'], '', $req->user['role'], '', json_encode($req->body), $req->ip);
     Response::json(['message' => 'Config updated.']);
 }, $superAdmin);
+
+// ── Security Alerts (derived from DB — 2SV disabled users) ───────────────────
+$router->get('/api/security/alerts', function (Request $req) {
+    $role = $req->user['role'];
+    $beId = null;
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        $beId = $pu['billing_entity_id'] ?? null;
+    }
+    $beFilter = $beId ? 'AND wu.billing_entity_id = :be' : '';
+    $params   = $beId ? [':be' => $beId] : [];
+
+    // 2SV disabled = High severity
+    $rows = Database::query(
+        "SELECT wu.id, CONCAT(wu.first_name,' ',wu.last_name) AS user_name,
+                wu.email, d.name AS domain_name, wu.status, wu.created_at
+         FROM workspace_users wu
+         JOIN domains d ON d.id = wu.domain_id
+         WHERE wu.two_sv_enabled = 0 AND wu.status = 'active' $beFilter
+         ORDER BY wu.email LIMIT 200",
+        $params
+    );
+
+    $alerts = [];
+    foreach ($rows as $r) {
+        $alerts[] = [
+            'id'        => 'sv_' . $r['id'],
+            'user_name' => $r['user_name'],
+            'email'     => $r['email'],
+            'domain'    => $r['domain_name'],
+            'type'      => '2sv_disabled',
+            'severity'  => 'high',
+            'message'   => '2-Step Verification is disabled',
+            'resolved'  => false,
+            'timestamp' => $r['created_at'],
+        ];
+    }
+    Response::json(['data' => $alerts]);
+}, $auth);
+
+// ── Login History (from audit_log LOGIN entries) ───────────────────────────────
+$router->get('/api/security/login-history', function (Request $req) {
+    $role = $req->user['role'];
+    $beId = null;
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        $beId = $pu['billing_entity_id'] ?? null;
+    }
+
+    $page  = max(1, (int)($req->query['page'] ?? 1));
+    $limit = min((int)($req->query['limit'] ?? 50), 200);
+    $off   = ($page - 1) * $limit;
+
+    if ($beId) {
+        // Show user_sessions for workspace users under this billing entity
+        $rows = Database::query(
+            "SELECT us.user_id, us.user_type, us.ip_address, us.user_agent, us.created_at,
+                    CONCAT(wu.first_name,' ',wu.last_name) AS actor_name, wu.email AS actor_email,
+                    d.name AS domain_name
+             FROM user_sessions us
+             JOIN workspace_users wu ON wu.email = (
+                SELECT email FROM portal_users WHERE id = us.user_id AND us.user_type = 'portal'
+             )
+             JOIN domains d ON d.id = wu.domain_id
+             WHERE us.user_type = 'portal' AND wu.billing_entity_id = :be
+             ORDER BY us.created_at DESC LIMIT :lim OFFSET :off",
+            [':be' => $beId, ':lim' => $limit, ':off' => $off]
+        );
+        // fallback: just show portal user's own sessions
+        if (empty($rows)) {
+            $rows = Database::query(
+                "SELECT us.*, pu.name AS actor_name, pu.email AS actor_email, '' AS domain_name
+                 FROM user_sessions us
+                 JOIN portal_users pu ON pu.id = us.user_id AND us.user_type = 'portal'
+                 WHERE pu.billing_entity_id = :be
+                 ORDER BY us.created_at DESC LIMIT :lim OFFSET :off",
+                [':be' => $beId, ':lim' => $limit, ':off' => $off]
+            );
+        }
+    } else {
+        $rows = Database::query(
+            "SELECT al.id, al.actor_name, al.actor_role, al.action, al.detail, al.ip_address, al.created_at
+             FROM audit_log al
+             WHERE al.action = 'LOGIN'
+             ORDER BY al.created_at DESC LIMIT :lim OFFSET :off",
+            [':lim' => $limit, ':off' => $off]
+        );
+    }
+    Response::json(['data' => $rows]);
+}, $auth);
 
 // ── Admin: Coupons ────────────────────────────────────────────────────────────
 $router->get('/api/admin/coupons', function (Request $req) {

@@ -13,7 +13,7 @@ interface ApiInvoice {
   id: number;
   invoice_number: string;
   billing_entity_name: string;
-  amount: number;
+  total_amount: number;
   status: string;
   invoice_date: string;
   due_date: string;
@@ -85,7 +85,7 @@ export function InvoicesPage() {
                 <tr key={inv.id} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-5 py-4 font-mono text-xs text-[#1A7DC4] font-medium">{inv.invoice_number}</td>
                   <td className="px-5 py-4 text-slate-700 font-medium">{inv.billing_entity_name}</td>
-                  <td className="px-5 py-4 text-right text-slate-800 font-semibold tabular-nums">₹{(inv.amount ?? 0).toLocaleString('en-IN')}</td>
+                  <td className="px-5 py-4 text-right text-slate-800 font-semibold tabular-nums">₹{(inv.total_amount ?? 0).toLocaleString('en-IN')}</td>
                   <td className="px-5 py-4">
                     <Badge variant={statusVariant[inv.status] ?? 'warning'}>
                       {inv.status?.charAt(0).toUpperCase() + inv.status?.slice(1)}
