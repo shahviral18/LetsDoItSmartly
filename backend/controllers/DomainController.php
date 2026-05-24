@@ -5,14 +5,31 @@ class DomainController
 {
     public function list(Request $req): void
     {
-        $domains = Database::query(
-            'SELECT d.*, be.name AS billing_entity_name,
-                    COUNT(wu.id) AS user_count
-             FROM domains d
-             JOIN billing_entities be ON be.id = d.billing_entity_id
-             LEFT JOIN workspace_users wu ON wu.domain_id = d.id
-             GROUP BY d.id ORDER BY d.name'
-        );
+        $role = $req->user['role'] ?? '';
+        if ($role === 'domain_owner') {
+            // Scope to their billing entity
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            $beId = $pu['billing_entity_id'] ?? null;
+            if (!$beId) { Response::json(['data' => []]); return; }
+            $domains = Database::query(
+                'SELECT d.*, be.name AS billing_entity_name, COUNT(wu.id) AS user_count
+                 FROM domains d
+                 JOIN billing_entities be ON be.id = d.billing_entity_id
+                 LEFT JOIN workspace_users wu ON wu.domain_id = d.id
+                 WHERE d.billing_entity_id = :be AND d.is_active = 1
+                 GROUP BY d.id ORDER BY d.name',
+                [':be' => $beId]
+            );
+        } else {
+            $domains = Database::query(
+                'SELECT d.*, be.name AS billing_entity_name,
+                        COUNT(wu.id) AS user_count
+                 FROM domains d
+                 JOIN billing_entities be ON be.id = d.billing_entity_id
+                 LEFT JOIN workspace_users wu ON wu.domain_id = d.id
+                 GROUP BY d.id ORDER BY d.name'
+            );
+        }
         Response::json(['data' => $domains]);
     }
 

@@ -240,7 +240,7 @@ export function UsersPage() {
                           >
                             {u.firstName[0]}{u.lastName[0]}
                           </div>
-                          <Link to={`/app/users/${u.id}`} className="font-medium text-slate-800 hover:text-[#1A7DC4] transition-colors">
+                          <Link to={`/users/${u.id}`} className="font-medium text-slate-800 hover:text-[#1A7DC4] transition-colors">
                             {u.firstName} {u.lastName}
                           </Link>
                         </div>
@@ -269,7 +269,7 @@ export function UsersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <Link to={`/app/users/${u.id}`} className="text-xs font-medium text-[#1A7DC4] hover:underline">
+                          <Link to={`/users/${u.id}`} className="text-xs font-medium text-[#1A7DC4] hover:underline">
                             View
                           </Link>
                           <button

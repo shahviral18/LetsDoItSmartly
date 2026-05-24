@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { LayoutDashboard, Users, Globe, Shield, CreditCard, FileText, ScrollText, Settings, ChevronLeft, ChevronRight, LogOut, ChevronDown, Handshake, BarChart3, Bell, Tag, Building2, X, Eye } from "lucide-react";
+import { LayoutDashboard, Users, Globe, Shield, CreditCard, FileText, ScrollText, Settings, ChevronLeft, ChevronRight, LogOut, ChevronDown, Handshake, BarChart3, Bell, Tag, Building2, X, Eye, UserCircle } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import type { Role } from "../../types";
@@ -73,6 +73,7 @@ function SidebarNav({ collapsed, role, onClick }: { collapsed: boolean; role: Ro
 
 function UserFooter({ collapsed, onLogout }: { collapsed: boolean; onLogout: () => void }) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const initials = user?.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() ?? "U";
   return (
@@ -88,6 +89,7 @@ function UserFooter({ collapsed, onLogout }: { collapsed: boolean; onLogout: () 
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
             className={cn("absolute bottom-full mb-1 rounded-xl border border-border bg-card shadow-card overflow-hidden z-50", collapsed ? "left-full ml-2 w-48" : "left-2 right-2")}>
             <div className="px-3 py-2.5 border-b border-border"><p className="text-xs font-bold text-foreground">{user?.name}</p><p className="text-[10px] text-muted-foreground">{user?.email}</p></div>
+            <button onClick={() => { setOpen(false); navigate('/profile'); }} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-foreground hover:bg-sidebar-accent transition-colors"><UserCircle className="w-4 h-4" /> My Profile</button>
             <button onClick={onLogout} className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-danger hover:bg-danger/5 transition-colors"><LogOut className="w-4 h-4" /> Logout</button>
           </motion.div>
         )}

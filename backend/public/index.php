@@ -168,7 +168,7 @@ $router->get  ('/api/billing-entities/:id',  [BillingEntityController::class, 'g
 $router->patch('/api/billing-entities/:id',  [BillingEntityController::class, 'update'], AuthMiddleware::staffOnly(['super_admin','admin']));
 
 // ── Domains ───────────────────────────────────────────────────────────────────
-$router->get  ('/api/domains',              [DomainController::class, 'list'],   $staffAuth);
+$router->get  ('/api/domains',              [DomainController::class, 'list'],   $auth);  // staff=all, domain_owner=scoped
 $router->post ('/api/domains',              [DomainController::class, 'create'], AuthMiddleware::staffOnly(['super_admin','admin']));
 $router->get  ('/api/domains/:id',          [DomainController::class, 'get'],    $staffAuth);
 $router->patch('/api/domains/:id',          [DomainController::class, 'update'], AuthMiddleware::staffOnly(['super_admin','admin']));
@@ -304,6 +304,13 @@ $router->get('/api/security/alerts', function (Request $req) {
         $params
     );
 
+    // Load all resolutions for quick lookup
+    $resolutions = [];
+    try {
+        $ress = Database::query('SELECT alert_key, resolution_note, resolved_at FROM security_alert_resolutions');
+        foreach ($ress as $res) $resolutions[$res['alert_key']] = $res;
+    } catch (Throwable $e) { /* table may not exist yet */ }
+
     $alerts = [];
     foreach ($rows as $r) {
         $name  = $r['user_name'];
@@ -315,9 +322,13 @@ $router->get('/api/security/alerts', function (Request $req) {
         if ($r['status'] === 'active' && !$r['last_login_at']) {
             $age = (int) floor((time() - strtotime($r['created_at'])) / 86400);
             if ($age >= 7) {
-                $alerts[] = ['id'=>'never_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                $aid = 'never_'.$r['id'];
+                $res = $resolutions[$aid] ?? null;
+                $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                     'type'=>'never_logged_in','severity'=>'high',
-                    'message'=>"Account active {$age} days, never logged in",'resolved'=>false,'timestamp'=>$ts];
+                    'message'=>"Account active {$age} days, never logged in",
+                    'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                    'timestamp'=>$ts];
             }
         }
 
@@ -325,45 +336,69 @@ $router->get('/api/security/alerts', function (Request $req) {
         if ((int)$r['storage_total_mb'] > 0) {
             $pct = round((int)$r['storage_used_mb'] / (int)$r['storage_total_mb'] * 100);
             if ($pct >= 90) {
-                $alerts[] = ['id'=>'stcrit_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                $aid = 'stcrit_'.$r['id'];
+                $res = $resolutions[$aid] ?? null;
+                $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                     'type'=>'storage_critical','severity'=>'high',
-                    'message'=>"Storage {$pct}% full",'resolved'=>false,'timestamp'=>$ts];
+                    'message'=>"Storage {$pct}% full",
+                    'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                    'timestamp'=>$ts];
             } elseif ($pct >= 75) {
-                $alerts[] = ['id'=>'stwarn_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                $aid = 'stwarn_'.$r['id'];
+                $res = $resolutions[$aid] ?? null;
+                $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                     'type'=>'storage_warning','severity'=>'medium',
-                    'message'=>"Storage {$pct}% used",'resolved'=>false,'timestamp'=>$ts];
+                    'message'=>"Storage {$pct}% used",
+                    'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                    'timestamp'=>$ts];
             }
         }
 
         // 2SV disabled on active accounts → Medium
         if ($r['status'] === 'active' && !(int)$r['two_sv_enabled']) {
-            $alerts[] = ['id'=>'2sv_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+            $aid = '2sv_'.$r['id'];
+            $res = $resolutions[$aid] ?? null;
+            $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                 'type'=>'2sv_disabled','severity'=>'medium',
-                'message'=>'2-Step Verification is disabled','resolved'=>false,'timestamp'=>$ts];
+                'message'=>'2-Step Verification is disabled',
+                'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                'timestamp'=>$ts];
         }
 
         // Suspended accounts → High
         if ($r['status'] === 'suspended') {
-            $alerts[] = ['id'=>'susp_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+            $aid = 'susp_'.$r['id'];
+            $res = $resolutions[$aid] ?? null;
+            $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                 'type'=>'account_suspended','severity'=>'high',
-                'message'=>'Account is suspended','resolved'=>false,'timestamp'=>$ts];
+                'message'=>'Account is suspended',
+                'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                'timestamp'=>$ts];
         }
 
         // No login in 60+ days → Low
         if ($r['last_login_at'] && $r['status'] === 'active') {
             $days = (int) floor((time() - strtotime($r['last_login_at'])) / 86400);
             if ($days >= 60) {
-                $alerts[] = ['id'=>'stale_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+                $aid = 'stale_'.$r['id'];
+                $res = $resolutions[$aid] ?? null;
+                $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                     'type'=>'stale_account','severity'=>'low',
-                    'message'=>"No login in {$days} days",'resolved'=>false,'timestamp'=>$r['last_login_at']];
+                    'message'=>"No login in {$days} days",
+                    'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                    'timestamp'=>$r['last_login_at']];
             }
         }
 
         // Pending portal account (created via portal, never activated) → Low
         if ((int)$r['created_via_portal'] && $r['status'] === 'pending') {
-            $alerts[] = ['id'=>'pend_'.$r['id'],'user_name'=>$name,'email'=>$email,'domain'=>$dom,
+            $aid = 'pend_'.$r['id'];
+            $res = $resolutions[$aid] ?? null;
+            $alerts[] = ['id'=>$aid,'user_name'=>$name,'email'=>$email,'domain'=>$dom,
                 'type'=>'new_unverified','severity'=>'low',
-                'message'=>'Account pending activation','resolved'=>false,'timestamp'=>$ts];
+                'message'=>'Account pending activation',
+                'resolved'=>(bool)$res,'resolution_note'=>$res['resolution_note']??null,'resolved_at'=>$res['resolved_at']??null,
+                'timestamp'=>$ts];
         }
     }
 
@@ -372,6 +407,122 @@ $router->get('/api/security/alerts', function (Request $req) {
     usort($alerts, fn($a, $b) => $order[$a['severity']] <=> $order[$b['severity']]);
 
     Response::json(['data' => $alerts]);
+}, $auth);
+
+// ── Security Alert Resolve ────────────────────────────────────────────────────
+$router->patch('/api/security/alerts/:id/resolve', function (Request $req) {
+    $alertId = $req->params['id'] ?? '';
+    $note    = trim($req->body['note'] ?? '');
+    if (!$alertId) Response::error('Alert ID required', 400);
+    if (!$note)    Response::error('Resolution note required', 400);
+
+    // Ensure table exists
+    Database::execute("CREATE TABLE IF NOT EXISTS security_alert_resolutions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        alert_key VARCHAR(64) NOT NULL,
+        resolved_by INT NOT NULL,
+        resolution_note TEXT NOT NULL,
+        resolved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_alert_key (alert_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    Database::execute(
+        'INSERT INTO security_alert_resolutions (alert_key, resolved_by, resolution_note)
+         VALUES (:key, :by, :note)
+         ON DUPLICATE KEY UPDATE resolved_by = :by, resolution_note = :note, resolved_at = NOW()',
+        [':key' => $alertId, ':by' => $req->user['userId'], ':note' => $note]
+    );
+    AuditService::log('ALERT_RESOLVED', 'staff', $req->user['userId'], '', $req->user['role'], '', "Alert $alertId resolved: $note", $req->ip);
+    Response::json(['message' => 'Alert marked as resolved.']);
+}, $auth);
+
+// ── Shared Drives ─────────────────────────────────────────────────────────────
+$router->get('/api/shared-drives', function (Request $req) {
+    try {
+        $drives = GoogleWorkspaceService::listSharedDrives();
+        Response::json(['data' => $drives]);
+    } catch (Throwable $e) {
+        Response::error('Failed to fetch shared drives: ' . $e->getMessage(), 500);
+    }
+}, $auth);
+
+$router->get('/api/shared-drives/:driveId/members', function (Request $req) {
+    $driveId = $req->params['driveId'] ?? '';
+    if (!$driveId) Response::error('Drive ID required', 400);
+    try {
+        $members = GoogleWorkspaceService::getSharedDriveMembers($driveId);
+        Response::json(['data' => $members]);
+    } catch (Throwable $e) {
+        Response::error('Failed to fetch members: ' . $e->getMessage(), 500);
+    }
+}, $auth);
+
+// ── Profile ───────────────────────────────────────────────────────────────────
+$router->get('/api/profile', function (Request $req) {
+    $role = $req->user['role'];
+    if ($role === 'domain_owner') {
+        $u = Database::queryOne(
+            'SELECT pu.id, pu.name, pu.email, pu.phone, pu.company_name, pu.gstin, pu.billing_address,
+                    be.name AS billing_entity_name, be.id AS billing_entity_id
+             FROM portal_users pu
+             LEFT JOIN billing_entities be ON be.id = pu.billing_entity_id
+             WHERE pu.id = :id',
+            [':id' => $req->user['userId']]
+        );
+        if (!$u) Response::error('Not found', 404);
+        // Load linked domains
+        $domains = Database::query(
+            'SELECT id, name FROM domains WHERE billing_entity_id = :be AND is_active = 1 ORDER BY name',
+            [':be' => $u['billing_entity_id']]
+        );
+        $u['domains'] = $domains;
+        Response::json($u);
+    } else {
+        $u = Database::queryOne('SELECT id, name, email, role FROM staff_users WHERE id = :id', [':id' => $req->user['userId']]);
+        if (!$u) Response::error('Not found', 404);
+        Response::json($u);
+    }
+}, $auth);
+
+$router->patch('/api/profile', function (Request $req) {
+    $b = $req->body;
+    $role = $req->user['role'];
+    if ($role === 'domain_owner') {
+        $fields = [];
+        $params = [':id' => $req->user['userId']];
+        if (isset($b['name']))            { $fields[] = 'name = :name';           $params[':name']    = trim($b['name']); }
+        if (isset($b['phone']))           { $fields[] = 'phone = :phone';         $params[':phone']   = trim($b['phone']); }
+        if (isset($b['company_name']))    { $fields[] = 'company_name = :co';     $params[':co']      = trim($b['company_name']); }
+        if (isset($b['gstin']))           { $fields[] = 'gstin = :gstin';         $params[':gstin']   = trim($b['gstin']); }
+        if (isset($b['billing_address'])) { $fields[] = 'billing_address = :ba';  $params[':ba']      = trim($b['billing_address']); }
+        if (empty($fields)) Response::error('Nothing to update', 400);
+        Database::execute('UPDATE portal_users SET ' . implode(', ', $fields) . ' WHERE id = :id', $params);
+        Response::json(['message' => 'Profile updated.']);
+    } else {
+        if (!empty($b['name'])) {
+            Database::execute('UPDATE staff_users SET name = :n WHERE id = :id', [':n' => trim($b['name']), ':id' => $req->user['userId']]);
+        }
+        Response::json(['message' => 'Profile updated.']);
+    }
+}, $auth);
+
+$router->patch('/api/profile/password', function (Request $req) {
+    $b       = $req->body;
+    $current = $b['current_password'] ?? '';
+    $newPw   = $b['new_password'] ?? '';
+    if (!$current || !$newPw) Response::error('Current and new password required', 400);
+    if (strlen($newPw) < 8) Response::error('New password must be at least 8 characters', 400);
+
+    $role = $req->user['role'];
+    $table = ($role === 'domain_owner') ? 'portal_users' : 'staff_users';
+    $u = Database::queryOne("SELECT password_hash FROM $table WHERE id = :id", [':id' => $req->user['userId']]);
+    if (!$u || !password_verify($current, $u['password_hash'])) Response::error('Current password is incorrect', 400);
+
+    $hash = password_hash($newPw, PASSWORD_BCRYPT);
+    Database::execute("UPDATE $table SET password_hash = :h, password_reset_required = 0 WHERE id = :id",
+        [':h' => $hash, ':id' => $req->user['userId']]);
+    AuditService::log('PASSWORD_CHANGED', $role === 'domain_owner' ? 'portal' : 'staff', $req->user['userId'], '', $role, '', 'Password changed via profile', $req->ip);
+    Response::json(['message' => 'Password changed successfully.']);
 }, $auth);
 
 // ── Google Login History ──────────────────────────────────────────────────────

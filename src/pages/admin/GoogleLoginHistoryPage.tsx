@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Search, Loader2, ChevronRight, Monitor, Smartphone, Globe, AlertTriangle, CheckCircle2, XCircle, LogOut, ArrowLeft, ShieldOff } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Loader2, ChevronRight, Monitor, Smartphone, Globe, AlertTriangle, CheckCircle2, XCircle, LogOut, ArrowLeft, ShieldOff, X } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface GUser {
@@ -18,6 +19,7 @@ interface LoginEvent {
   timestamp: string;
   login_type: string;
   challenge: string;
+  challenge_result: string;
   is_suspicious: boolean;
   event_name: string;
 }
@@ -42,6 +44,7 @@ const planColors: Record<string, string> = {
 };
 
 export default function GoogleLoginHistoryPage() {
+  const [searchParams] = useSearchParams();
   const [users, setUsers] = useState<GUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -51,10 +54,20 @@ export default function GoogleLoginHistoryPage() {
   const [histError, setHistError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
   const [signOutMsg, setSignOutMsg] = useState('');
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
 
   useEffect(() => {
     api.get<{ data: GUser[] }>('/google/users')
-      .then(r => setUsers(r.data ?? []))
+      .then(r => {
+        const list = r.data ?? [];
+        setUsers(list);
+        // Auto-open user if ?email= param present
+        const emailParam = searchParams.get('email');
+        if (emailParam) {
+          const match = list.find(u => u.email.toLowerCase() === emailParam.toLowerCase());
+          if (match) openUser(match);
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -73,7 +86,7 @@ export default function GoogleLoginHistoryPage() {
 
   async function forceSignOut() {
     if (!selected) return;
-    if (!confirm(`Force sign out ${selected.email} from ALL Google sessions? They will need to log in again on every device.`)) return;
+    setShowSignOutModal(false);
     setSigningOut(true);
     setSignOutMsg('');
     try {
@@ -123,7 +136,7 @@ export default function GoogleLoginHistoryPage() {
               <p className="text-xs text-slate-500 mt-0.5">Signs this user out of all Google sessions on every device immediately.</p>
             </div>
             <button
-              onClick={forceSignOut}
+              onClick={() => setShowSignOutModal(true)}
               disabled={signingOut}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
             >
@@ -168,7 +181,7 @@ export default function GoogleLoginHistoryPage() {
                 <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide border-b border-slate-100">
                   <th className="text-left px-5 py-3 font-medium">Time</th>
                   <th className="text-left px-5 py-3 font-medium">Login Method</th>
-                  <th className="text-left px-5 py-3 font-medium hidden md:table-cell">2SV Challenge</th>
+                  <th className="text-left px-5 py-3 font-medium hidden md:table-cell">Detail</th>
                   <th className="text-left px-5 py-3 font-medium">Status</th>
                 </tr>
               </thead>
@@ -182,8 +195,23 @@ export default function GoogleLoginHistoryPage() {
                         <span className="capitalize">{e.login_type?.replace(/_/g, ' ') || 'Password'}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3.5 text-slate-500 text-xs hidden md:table-cell capitalize">
-                      {e.challenge?.replace(/_/g, ' ') || '—'}
+                    <td className="px-5 py-3.5 hidden md:table-cell">
+                      {e.is_suspicious ? (
+                        <div>
+                          <span className="text-red-600 text-xs font-medium">
+                            {e.challenge_result ? e.challenge_result.replace(/_/g, ' ') : 'Flagged by Google'}
+                          </span>
+                          <p className="text-slate-400 text-xs mt-0.5">Unusual activity detected</p>
+                        </div>
+                      ) : e.event_name === 'login_failure' ? (
+                        <span className="text-amber-600 text-xs font-medium">Wrong password</span>
+                      ) : e.event_name === 'logout' ? (
+                        <span className="text-slate-400 text-xs">User signed out</span>
+                      ) : e.challenge ? (
+                        <span className="text-slate-500 text-xs capitalize">{e.challenge.replace(/_/g, ' ')}</span>
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       {e.is_suspicious ? (
@@ -210,6 +238,38 @@ export default function GoogleLoginHistoryPage() {
             </table>
           )}
         </div>
+
+        {/* Force Sign Out Confirmation Modal */}
+        {showSignOutModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowSignOutModal(false)} />
+            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold text-slate-800">Force Sign Out</h3>
+                <button onClick={() => setShowSignOutModal(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="px-3 py-2.5 rounded-lg bg-red-50 border border-red-100 text-sm">
+                <p className="font-medium text-slate-700">{selected.first_name} {selected.last_name}</p>
+                <p className="text-xs text-red-600 mt-0.5">{selected.email}</p>
+              </div>
+              <p className="text-sm text-slate-600">
+                This will immediately sign <strong>{selected.first_name}</strong> out of <strong>all Google sessions on every device</strong>. They will need to log in again.
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => setShowSignOutModal(false)}
+                  className="flex-1 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">
+                  Cancel
+                </button>
+                <button onClick={forceSignOut}
+                  className="flex-1 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition-colors flex items-center justify-center gap-2">
+                  <LogOut size={14} /> Force Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

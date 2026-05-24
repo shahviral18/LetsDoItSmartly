@@ -391,23 +391,27 @@ class GoogleWorkspaceService
             );
             $events  = [];
             foreach ($result->getItems() ?? [] as $item) {
-                $loginType  = '';
-                $isSusp     = false;
-                $challenge  = '';
+                $loginType       = '';
+                $isSusp          = false;
+                $challenge       = '';
+                $challengeResult = '';
                 foreach ($item->getEvents() as $ev) {
-                    $eventName = $ev->getName();
                     foreach ($ev->getParameters() ?? [] as $p) {
-                        if ($p->getName() === 'login_type')             $loginType = (string) $p->getValue();
-                        if ($p->getName() === 'is_suspicious')          $isSusp    = (bool)   $p->getBoolValue();
-                        if ($p->getName() === 'login_challenge_method') $challenge = (string) $p->getValue();
+                        switch ($p->getName()) {
+                            case 'login_type':             $loginType       = (string) $p->getValue(); break;
+                            case 'is_suspicious':          $isSusp          = (bool)   $p->getBoolValue(); break;
+                            case 'login_challenge_method': $challenge       = (string) $p->getValue(); break;
+                            case 'login_challenge_result': $challengeResult = (string) $p->getValue(); break;
+                        }
                     }
                 }
                 $events[] = [
-                    'timestamp'    => $item->getId()->getTime(),
-                    'login_type'   => $loginType ?: 'google_password',
-                    'challenge'    => $challenge,
-                    'is_suspicious'=> $isSusp,
-                    'event_name'   => $item->getEvents()[0]->getName() ?? 'login_success',
+                    'timestamp'        => $item->getId()->getTime(),
+                    'login_type'       => $loginType ?: 'google_password',
+                    'challenge'        => $challenge,
+                    'challenge_result' => $challengeResult,
+                    'is_suspicious'    => $isSusp,
+                    'event_name'       => $item->getEvents()[0]->getName() ?? 'login_success',
                 ];
             }
             return $events;
@@ -434,6 +438,80 @@ class GoogleWorkspaceService
             return true;
         } catch (Throwable $e) {
             Logger::error("[GWS] signOutUser FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * List all shared drives in the Google Workspace tenant.
+     * Uses admin-level Drive service (subject = admin email, not user impersonation).
+     */
+    public static function listSharedDrives(): array
+    {
+        try {
+            self::boot();
+            $client = new Google_Client();
+            $client->setApplicationName('LetsDoItSmartly');
+            $client->setAuthConfig(GOOGLE_CREDENTIALS);
+            $client->setScopes(['https://www.googleapis.com/auth/drive']);
+            $client->setSubject(GOOGLE_ADMIN_EMAIL);
+            $drive = new Google_Service_Drive($client);
+
+            $result = [];
+            $pageToken = null;
+            do {
+                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime)'];
+                if ($pageToken) $opts['pageToken'] = $pageToken;
+                $resp = $drive->drives->listDrives($opts);
+                foreach ($resp->getDrives() as $d) {
+                    $result[] = [
+                        'id'        => $d->getId(),
+                        'name'      => $d->getName(),
+                        'createdAt' => $d->getCreatedTime(),
+                        'sizeMb'    => 0,
+                        'membersCount' => 0,
+                    ];
+                }
+                $pageToken = $resp->getNextPageToken();
+            } while ($pageToken);
+
+            return $result;
+        } catch (Throwable $e) {
+            Logger::error('[GWS] listSharedDrives FAILED: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * List members (permissions) for a specific shared drive.
+     */
+    public static function getSharedDriveMembers(string $driveId): array
+    {
+        try {
+            self::boot();
+            $client = new Google_Client();
+            $client->setApplicationName('LetsDoItSmartly');
+            $client->setAuthConfig(GOOGLE_CREDENTIALS);
+            $client->setScopes(['https://www.googleapis.com/auth/drive']);
+            $client->setSubject(GOOGLE_ADMIN_EMAIL);
+            $drive = new Google_Service_Drive($client);
+
+            $resp = $drive->permissions->listPermissions($driveId, [
+                'supportsAllDrives' => true,
+                'fields' => 'permissions(id,emailAddress,role,type)',
+            ]);
+            $members = [];
+            foreach ($resp->getPermissions() as $p) {
+                if ($p->getType() === 'user' && $p->getEmailAddress()) {
+                    $members[] = [
+                        'email' => $p->getEmailAddress(),
+                        'role'  => $p->getRole(),
+                    ];
+                }
+            }
+            return $members;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] getSharedDriveMembers FAILED $driveId: " . $e->getMessage());
             throw $e;
         }
     }

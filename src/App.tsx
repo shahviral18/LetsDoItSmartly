@@ -24,6 +24,7 @@ import DistributorDashboardPage from './pages/distributor/DistributorDashboardPa
 import BackofficePage from './pages/admin/BackofficePage';
 import EmailSurveillancePage from './pages/surveillance/EmailSurveillancePage';
 import BccRequestDetailPage from './pages/surveillance/BccRequestDetailPage';
+import ProfilePage from './pages/profile/ProfilePage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -65,6 +66,7 @@ function AppRoutes() {
         <Route path="/distributors" element={<BackofficePage />} />
         <Route path="/surveillance" element={<EmailSurveillancePage />} />
         <Route path="/surveillance/:id" element={<BccRequestDetailPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Route>
 
       <Route path="/" element={<Navigate to="/dashboard" replace />} />

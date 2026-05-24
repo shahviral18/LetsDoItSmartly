@@ -1,8 +1,15 @@
-import { useState } from 'react';
-import { CheckCircle2, Tag, AlertCircle } from 'lucide-react';
-import { mockPlans, mockBillingEntities, mockCoupons } from '../../mock/data';
+import { useState, useEffect } from 'react';
+import { CheckCircle2, Tag, AlertCircle, Loader2 } from 'lucide-react';
+import { mockPlans, mockCoupons } from '../../mock/data';
+import { api } from '../../lib/api';
 import { Card } from '../../components/ui/Card';
 import type { Plan } from '../../types';
+
+interface BillingEntity {
+  id: number;
+  name: string;
+  gstin?: string;
+}
 
 const PLAN_FEATURES: Record<Plan, string[]> = {
   basic: ['15 GB Storage', 'Google Workspace Core', 'Email & Calendar', 'Basic Support'],
@@ -12,13 +19,26 @@ const PLAN_FEATURES: Record<Plan, string[]> = {
 };
 
 export function BuyLicensesPage() {
+  const [billingEntities, setBillingEntities] = useState<BillingEntity[]>([]);
+  const [beLoading, setBeLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<Plan>('basic');
   const [qty, setQty] = useState(5);
-  const [selectedBE, setSelectedBE] = useState(mockBillingEntities[0].id);
+  const [selectedBE, setSelectedBE] = useState<number | null>(null);
   const [couponCode, setCouponCode] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<{ discount: number; type: 'percent' | 'flat'; label: string } | null>(null);
   const [couponError, setCouponError] = useState('');
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    api.get<{ data: BillingEntity[] }>('/billing-entities')
+      .then(r => {
+        const list = r.data ?? [];
+        setBillingEntities(list);
+        if (list.length > 0) setSelectedBE(list[0].id);
+      })
+      .catch(() => {})
+      .finally(() => setBeLoading(false));
+  }, []);
 
   const plan = mockPlans[selectedPlan];
   const today = new Date('2026-05-24');
@@ -84,22 +104,28 @@ export function BuyLicensesPage() {
           {/* Billing Entity selector */}
           <Card className="p-5">
             <label className="block text-sm font-semibold text-slate-700 mb-3">Billing Account</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {mockBillingEntities.map(be => (
-                <button
-                  key={be.id}
-                  onClick={() => setSelectedBE(be.id)}
-                  className={`text-left px-4 py-3 rounded-xl border text-sm transition-all ${
-                    selectedBE === be.id
-                      ? 'border-[#1A7DC4] bg-blue-50 text-[#0D5A96] font-medium'
-                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
-                  }`}
-                >
-                  <p className="font-medium">{be.name}</p>
-                  <p className="text-xs opacity-60 mt-0.5">{be.gst}</p>
-                </button>
-              ))}
-            </div>
+            {beLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-2"><Loader2 size={14} className="animate-spin" /> Loading…</div>
+            ) : billingEntities.length === 0 ? (
+              <p className="text-sm text-slate-400">No billing accounts found.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {billingEntities.map(be => (
+                  <button
+                    key={be.id}
+                    onClick={() => setSelectedBE(be.id)}
+                    className={`text-left px-4 py-3 rounded-xl border text-sm transition-all ${
+                      selectedBE === be.id
+                        ? 'border-[#1A7DC4] bg-blue-50 text-[#0D5A96] font-medium'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    <p className="font-medium">{be.name}</p>
+                    {be.gstin && <p className="text-xs opacity-60 mt-0.5">{be.gstin}</p>}
+                  </button>
+                ))}
+              </div>
+            )}
           </Card>
 
           {/* Plan selector */}

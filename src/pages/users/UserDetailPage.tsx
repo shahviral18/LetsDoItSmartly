@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Loader2, ExternalLink } from 'lucide-react';
 import { api } from '../../lib/api';
 
 const planColors: Record<string, string> = {
@@ -53,6 +53,7 @@ function mbToGb(mb: number) {
 
 export function UserDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [user, setUser] = useState<ApiUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -239,8 +240,19 @@ export function UserDetailPage() {
             <p className="text-sm text-slate-500">
               {isDeletedPending
                 ? 'This account is pending permanent deletion. It is suspended in Google Workspace. You can recover it within 30 days.'
-                : 'Login history, devices, aliases, and group memberships will be available once Google Reports API integration is complete.'}
+                : 'Manage this user\'s Google Workspace session and login activity using the quick links below.'}
             </p>
+            {!isDeletedPending && (
+              <div className="mt-4 flex flex-col gap-2">
+                <button
+                  onClick={() => navigate(`/security/google-logins?email=${encodeURIComponent(user.email)}`)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-200 text-sm font-medium text-[#1A7DC4] hover:bg-blue-50 hover:border-[#1A7DC4] transition-colors text-left"
+                >
+                  <ExternalLink size={14} />
+                  View Google Login History
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
