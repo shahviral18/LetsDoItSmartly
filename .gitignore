@@ -26,3 +26,7 @@ dist-ssr
 # Backend secrets — never commit
 backend/config/server.php
 backend/config/*.env
+
+backend/.env
+backend/logs/
+backend/config/server.php

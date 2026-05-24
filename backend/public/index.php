@@ -1,0 +1,181 @@
+<?php
+declare(strict_types=1);
+
+// CORS preflight — bootstrap minimal set before full load
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    define('BASE_PATH', dirname(__DIR__));
+    require BASE_PATH . '/helpers/Logger.php';
+    require BASE_PATH . '/config/env.php';
+    require BASE_PATH . '/helpers/Response.php';
+    Response::handleOptions();
+}
+
+define('BASE_PATH', dirname(__DIR__));
+
+// ── Core ──────────────────────────────────────────────────────────────────────
+require BASE_PATH . '/helpers/Logger.php';
+require BASE_PATH . '/config/env.php';
+require BASE_PATH . '/config/database.php';
+require BASE_PATH . '/helpers/JwtHelper.php';
+require BASE_PATH . '/helpers/Request.php';
+require BASE_PATH . '/helpers/Response.php';
+require BASE_PATH . '/helpers/Router.php';
+
+// ── Services ──────────────────────────────────────────────────────────────────
+require BASE_PATH . '/services/AuditService.php';
+require BASE_PATH . '/services/GoogleWorkspaceService.php';
+require BASE_PATH . '/services/ZohoPaymentService.php';
+require BASE_PATH . '/services/ZohoBooksService.php';
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+require BASE_PATH . '/middleware/AuthMiddleware.php';
+require BASE_PATH . '/middleware/RateLimiter.php';
+
+// ── Controllers ───────────────────────────────────────────────────────────────
+require BASE_PATH . '/controllers/AuthController.php';
+require BASE_PATH . '/controllers/StaffController.php';
+require BASE_PATH . '/controllers/BillingEntityController.php';
+require BASE_PATH . '/controllers/DomainController.php';
+require BASE_PATH . '/controllers/LicenseController.php';
+require BASE_PATH . '/controllers/WorkspaceUserController.php';
+require BASE_PATH . '/controllers/InvoiceController.php';
+require BASE_PATH . '/controllers/PaymentController.php';
+require BASE_PATH . '/controllers/DistributorController.php';
+require BASE_PATH . '/controllers/BccController.php';
+
+// ── Global error handler ──────────────────────────────────────────────────────
+set_exception_handler(function (Throwable $e) {
+    Logger::error('[Unhandled] ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    echo json_encode(['error' => 'Internal Server Error']);
+    exit;
+});
+
+$request = new Request();
+$router  = new Router($request);
+
+// ── Middleware shorthands ─────────────────────────────────────────────────────
+$auth        = [[AuthMiddleware::class, 'authenticate']];
+$staffAuth   = AuthMiddleware::staffOnly();
+$superAdmin  = AuthMiddleware::superAdminOnly();
+$domainOwner = [...$auth, AuthMiddleware::authorize(['domain_owner'])];
+
+// ── Health ────────────────────────────────────────────────────────────────────
+$router->get('/api/health', function (Request $req) {
+    Response::json(['status' => 'ok', 'app' => 'LetsDoItSmartly', 'env' => APP_ENV, 'time' => date('c')]);
+});
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+$router->post('/api/auth/login',           [AuthController::class, 'login'],          [RateLimiter::limit('LOGIN_ATTEMPT', 10, 900)]);
+$router->get ('/api/auth/me',              [AuthController::class, 'me'],             $auth);
+$router->post('/api/auth/logout',          [AuthController::class, 'logout'],         $auth);
+$router->post('/api/auth/forgot-password', [AuthController::class, 'forgotPassword'], [RateLimiter::limit('FORGOT_PASSWORD', 3, 900)]);
+$router->post('/api/auth/reset-password',  [AuthController::class, 'resetPassword']);
+$router->post('/api/auth/change-password', [AuthController::class, 'changePassword'], $auth);
+
+// ── Staff Management (super_admin only) ───────────────────────────────────────
+$router->get   ('/api/staff',        [StaffController::class, 'list'],   $superAdmin);
+$router->post  ('/api/staff',        [StaffController::class, 'create'], $superAdmin);
+$router->patch ('/api/staff/:id',    [StaffController::class, 'update'], $superAdmin);
+$router->delete('/api/staff/:id',    [StaffController::class, 'delete'], $superAdmin);
+
+// ── Billing Entities ──────────────────────────────────────────────────────────
+$router->get  ('/api/billing-entities',      [BillingEntityController::class, 'list'],   $staffAuth);
+$router->post ('/api/billing-entities',      [BillingEntityController::class, 'create'], AuthMiddleware::staffOnly(['super_admin','admin']));
+$router->get  ('/api/billing-entities/:id',  [BillingEntityController::class, 'get'],    $staffAuth);
+$router->patch('/api/billing-entities/:id',  [BillingEntityController::class, 'update'], AuthMiddleware::staffOnly(['super_admin','admin']));
+
+// ── Domains ───────────────────────────────────────────────────────────────────
+$router->get  ('/api/domains',              [DomainController::class, 'list'],   $staffAuth);
+$router->post ('/api/domains',              [DomainController::class, 'create'], AuthMiddleware::staffOnly(['super_admin','admin']));
+$router->get  ('/api/domains/:id',          [DomainController::class, 'get'],    $staffAuth);
+$router->patch('/api/domains/:id',          [DomainController::class, 'update'], AuthMiddleware::staffOnly(['super_admin','admin']));
+// Domain owner: get their own domains
+$router->get('/api/my/domains',             [DomainController::class, 'myDomains'], [...$auth, AuthMiddleware::authorize(['domain_owner'])]);
+
+// ── License Pool ──────────────────────────────────────────────────────────────
+$router->get ('/api/billing-entities/:id/license-pool', [LicenseController::class, 'getPool'],     $auth);
+$router->post('/api/billing-entities/:id/buy-licenses', [LicenseController::class, 'initiateBuy'], $auth);
+
+// ── Plans (public — needed for checkout page) ─────────────────────────────────
+$router->get ('/api/plans',      [LicenseController::class, 'getPlans']);
+$router->post('/api/plans/:id',  [LicenseController::class, 'updatePlan'], $superAdmin);
+
+// ── Workspace Users ───────────────────────────────────────────────────────────
+$router->get   ('/api/workspace-users',          [WorkspaceUserController::class, 'list'],    $auth);
+$router->post  ('/api/workspace-users',          [WorkspaceUserController::class, 'create'],  $auth);
+$router->get   ('/api/workspace-users/:id',      [WorkspaceUserController::class, 'get'],     $auth);
+$router->patch ('/api/workspace-users/:id',      [WorkspaceUserController::class, 'update'],  $auth);
+$router->post  ('/api/workspace-users/:id/suspend',   [WorkspaceUserController::class, 'suspend'],   $auth);
+$router->post  ('/api/workspace-users/:id/unsuspend', [WorkspaceUserController::class, 'unsuspend'], $auth);
+$router->post  ('/api/workspace-users/:id/reset-password', [WorkspaceUserController::class, 'resetPassword'], $auth);
+$router->post  ('/api/workspace-users/:id/upgrade-plan',   [WorkspaceUserController::class, 'upgradePlan'],   $auth);
+
+// ── Payments ──────────────────────────────────────────────────────────────────
+$router->post('/api/payment/create-session', [PaymentController::class, 'createSession'], $auth);
+$router->get ('/api/payment/status',         [PaymentController::class, 'getStatus'],     $auth);
+$router->post('/api/webhook/zoho-payment',   [PaymentController::class, 'zohoWebhook']);
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+$router->get('/api/invoices',     [InvoiceController::class, 'list'],   $auth);
+$router->get('/api/invoices/:id', [InvoiceController::class, 'get'],    $auth);
+
+// Staff: all invoices
+$router->get('/api/admin/invoices', [InvoiceController::class, 'adminList'], $staffAuth);
+
+// ── Security & Audit ──────────────────────────────────────────────────────────
+$router->get('/api/audit-log',     function (Request $req) {
+    // Auditor, admin, super_admin
+    $allowed = ['super_admin', 'admin', 'auditor', 'support_admin'];
+    if (!in_array($req->user['role'], $allowed, true)) Response::error('Forbidden', 403);
+    $page  = (int) ($req->query['page'] ?? 1);
+    $limit = min((int) ($req->query['limit'] ?? 50), 200);
+    $offset = ($page - 1) * $limit;
+    $logs = Database::query(
+        'SELECT * FROM audit_log ORDER BY created_at DESC LIMIT :lim OFFSET :off',
+        [':lim' => $limit, ':off' => $offset]
+    );
+    Response::json(['data' => $logs]);
+}, $auth);
+
+// ── Distributor ───────────────────────────────────────────────────────────────
+$router->get  ('/api/distributor/dashboard',      [DistributorController::class, 'dashboard'],     [...$auth, AuthMiddleware::authorize(['distributor'])]);
+$router->get  ('/api/distributor/clients',        [DistributorController::class, 'clients'],       [...$auth, AuthMiddleware::authorize(['distributor'])]);
+$router->get  ('/api/distributor/payouts',        [DistributorController::class, 'payouts'],       [...$auth, AuthMiddleware::authorize(['distributor'])]);
+$router->post ('/api/distributor/request-payout', [DistributorController::class, 'requestPayout'], [...$auth, AuthMiddleware::authorize(['distributor'])]);
+// Admin: manage distributors
+$router->get  ('/api/admin/distributors',         [DistributorController::class, 'adminList'],     $staffAuth);
+$router->patch('/api/admin/distributors/:id',     [DistributorController::class, 'adminUpdate'],   AuthMiddleware::staffOnly(['super_admin','admin']));
+$router->patch('/api/admin/distributor-payouts/:id', [DistributorController::class, 'adminPayout'], AuthMiddleware::staffOnly(['super_admin','admin']));
+
+// ── BCC / Email Surveillance ──────────────────────────────────────────────────
+$router->get  ('/api/bcc-requests',        [BccController::class, 'list'],       $auth);
+$router->post ('/api/bcc-requests',        [BccController::class, 'create'],     [...$auth, AuthMiddleware::authorize(['domain_owner'])]);
+$router->get  ('/api/bcc-requests/:id',    [BccController::class, 'get'],        $auth);
+$router->patch('/api/bcc-requests/:id',    [BccController::class, 'updateStatus'], AuthMiddleware::staffOnly(['super_admin','admin','support_admin']));
+
+// ── Admin: config ─────────────────────────────────────────────────────────────
+$router->get  ('/api/admin/config',       function (Request $req) {
+    $config = Database::query('SELECT `key`, value FROM admin_config');
+    $out = [];
+    foreach ($config as $row) $out[$row['key']] = $row['value'];
+    Response::json($out);
+}, $superAdmin);
+
+$router->post('/api/admin/config', function (Request $req) {
+    foreach ($req->body as $key => $value) {
+        Database::execute(
+            'INSERT INTO admin_config (`key`, value, updated_by) VALUES (:k, :v, :by)
+             ON DUPLICATE KEY UPDATE value = :v, updated_by = :by',
+            [':k' => $key, ':v' => (string) $value, ':by' => $req->user['userId']]
+        );
+    }
+    AuditService::log('CONFIG_UPDATED', 'staff', $req->user['userId'], '', $req->user['role'], '', json_encode($req->body), $req->ip);
+    Response::json(['message' => 'Config updated.']);
+}, $superAdmin);
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+$router->dispatch();

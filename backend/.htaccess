@@ -1,0 +1,17 @@
+# Block sensitive files
+<FilesMatch "\.(env|sql|db|log|md|json)$">
+    Require all denied
+</FilesMatch>
+
+Options -Indexes
+
+RewriteEngine On
+
+# Block direct access to source dirs
+RewriteRule ^(config|controllers|services|middleware|helpers|database|cron|logs)(/|$) - [F,L]
+RewriteRule ^[^/]+\.php$ - [F,L]
+
+# Route everything to public/index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ public/index.php [QSA,L]
