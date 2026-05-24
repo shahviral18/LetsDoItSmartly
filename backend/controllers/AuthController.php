@@ -33,10 +33,10 @@ class AuthController
         );
         $userType = 'staff';
 
-        // Then portal_users
+        // Then portal_users (no 'role' column — always domain_owner)
         if (!$user) {
             $user = Database::queryOne(
-                'SELECT id, name, email, password_hash, role, is_active, password_reset_required,
+                'SELECT id, name, email, password_hash, "domain_owner" AS role, is_active, password_reset_required,
                         billing_entity_id
                  FROM portal_users WHERE email = :email',
                 [':email' => $email]
@@ -44,10 +44,11 @@ class AuthController
             $userType = 'portal';
         }
 
-        // Then distributors
+        // Then distributors (uses 'status' not 'is_active', no last_login_at)
         if (!$user) {
             $user = Database::queryOne(
-                'SELECT id, name, email, password_hash, "distributor" AS role, is_active,
+                'SELECT id, name, email, password_hash, "distributor" AS role,
+                        (status = "active") AS is_active,
                         password_reset_required, NULL AS billing_entity_id
                  FROM distributors WHERE email = :email AND status != "pending"',
                 [':email' => $email]
@@ -56,7 +57,7 @@ class AuthController
         }
 
         if (!$user || !password_verify($password, $user['password_hash'])) {
-            AuditService::log('LOGIN_FAILED', $userType, null, '', '', $email, 'Invalid credentials', $req->ip);
+            AuditService::log('LOGIN_FAILED', $userType, 0, '', '', $email, 'Invalid credentials', $req->ip);
             Response::error('Invalid email or password.', 401);
         }
 
@@ -83,9 +84,11 @@ class AuthController
             ]
         );
 
-        // Update last login
-        $table = $userType === 'staff' ? 'staff_users' : (($user['role'] === 'distributor') ? 'distributors' : 'portal_users');
-        Database::execute("UPDATE $table SET last_login_at = NOW() WHERE id = :id", [':id' => $user['id']]);
+        // Update last login (distributors table has no last_login_at column)
+        if ($user['role'] !== 'distributor') {
+            $table = $userType === 'staff' ? 'staff_users' : 'portal_users';
+            Database::execute("UPDATE $table SET last_login_at = NOW() WHERE id = :id", [':id' => $user['id']]);
+        }
 
         AuditService::log('LOGIN', $userType, $user['id'], $user['name'], $user['role'], $email, '', $req->ip);
 
@@ -124,13 +127,13 @@ class AuthController
             );
         } elseif ($role === 'distributor') {
             $user = Database::queryOne(
-                'SELECT id, name, email, "distributor" AS role, is_active, password_reset_required, last_login_at
+                'SELECT id, name, email, "distributor" AS role, (status = "active") AS is_active, password_reset_required, NULL AS last_login_at
                  FROM distributors WHERE id = :id',
                 [':id' => $userId]
             );
         } else {
             $user = Database::queryOne(
-                'SELECT id, name, email, role, is_active, password_reset_required, last_login_at, billing_entity_id
+                'SELECT id, name, email, "domain_owner" AS role, is_active, password_reset_required, last_login_at, billing_entity_id
                  FROM portal_users WHERE id = :id',
                 [':id' => $userId]
             );
