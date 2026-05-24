@@ -256,5 +256,42 @@ $router->post('/api/admin/config', function (Request $req) {
     Response::json(['message' => 'Config updated.']);
 }, $superAdmin);
 
+// ── Admin: Coupons ────────────────────────────────────────────────────────────
+$router->get('/api/admin/coupons', function (Request $req) {
+    $rows = Database::query('SELECT * FROM coupons WHERE deleted = 0 ORDER BY created_at DESC', []);
+    Response::json(['data' => $rows]);
+}, $superAdmin);
+
+$router->post('/api/admin/coupons', function (Request $req) {
+    $b = $req->body;
+    $code = strtoupper(trim($b['code'] ?? ''));
+    if (!$code) Response::error('Code is required', 422);
+    $type    = in_array($b['type'] ?? '', ['percent','fixed']) ? $b['type'] : 'percent';
+    $value   = (float) ($b['value'] ?? 0);
+    $maxUses = isset($b['max_uses']) ? (int)$b['max_uses'] : null;
+    $expires = !empty($b['expires_at']) ? $b['expires_at'] : null;
+    $id = Database::insert(
+        'INSERT INTO coupons (code, type, value, max_uses, expires_at, active, deleted, created_at)
+         VALUES (:code, :type, :value, :max_uses, :expires, 1, 0, NOW())',
+        [':code'=>$code,':type'=>$type,':value'=>$value,':max_uses'=>$maxUses,':expires'=>$expires]
+    );
+    AuditService::log('COUPON_CREATED', 'staff', $req->user['userId'], '', $req->user['role'], "coupon:$id", $code, $req->ip);
+    Response::json(['message' => 'Coupon created.', 'id' => $id], 201);
+}, $superAdmin);
+
+$router->patch('/api/admin/coupons/:id', function (Request $req) {
+    $id = (int) $req->params['id'];
+    $b  = $req->body;
+    if (isset($b['deleted']) && $b['deleted']) {
+        Database::execute('UPDATE coupons SET deleted = 1 WHERE id = :id', [':id' => $id]);
+        Response::json(['message' => 'Deleted.']);
+    }
+    if (isset($b['active'])) {
+        Database::execute('UPDATE coupons SET active = :a WHERE id = :id', [':a' => (int)$b['active'], ':id' => $id]);
+        Response::json(['message' => 'Updated.']);
+    }
+    Response::error('Nothing to update', 422);
+}, $superAdmin);
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 $router->dispatch();
