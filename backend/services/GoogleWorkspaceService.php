@@ -306,6 +306,43 @@ class GoogleWorkspaceService
     }
 
     /**
+     * List ALL users across the entire Google Workspace (all domains/OUs).
+     * Uses customer=my_customer so no per-domain enumeration needed.
+     */
+    public static function listAllUsers(): array
+    {
+        try {
+            $service   = self::getService();
+            $users     = [];
+            $pageToken = null;
+            do {
+                $params = ['customer' => 'my_customer', 'maxResults' => 500, 'projection' => 'full', 'showDeleted' => 'false'];
+                if ($pageToken) $params['pageToken'] = $pageToken;
+                $result    = $service->users->listUsers($params);
+                $pageToken = $result->getNextPageToken();
+                foreach ($result->getUsers() ?? [] as $u) {
+                    $name    = $u->getName();
+                    $users[] = [
+                        'email'        => strtolower($u->getPrimaryEmail()),
+                        'firstName'    => $name?->getGivenName(),
+                        'lastName'     => $name?->getFamilyName(),
+                        'suspended'    => (bool) $u->getSuspended(),
+                        'twoSVEnabled' => (bool) $u->getIsEnrolledIn2Sv(),
+                        'lastLogin'    => $u->getLastLoginTime(),
+                        'createdAt'    => $u->getCreationTime(),
+                        'ouPath'       => $u->getOrgUnitPath(),
+                    ];
+                }
+            } while ($pageToken);
+            Logger::info("[GWS] listAllUsers → " . count($users) . ' users across all domains');
+            return $users;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] listAllUsers FAILED: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
      * Get shared drives the user belongs to.
      */
     public static function getSharedDrives(string $email): array

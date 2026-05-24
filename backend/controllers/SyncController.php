@@ -2,17 +2,24 @@
 declare(strict_types=1);
 
 /**
- * SyncController — Import / sync users from Google Admin into workspace_users.
+ * SyncController — Import all users from Google Workspace into workspace_users.
  *
  * POST /api/admin/sync-google
- *   Body: { domain_id?: int }  — if omitted, syncs ALL active domains
+ *   Fetches ALL users across all domains (customer=my_customer).
+ *   Auto-creates billing_entities and domains for any new domain discovered.
  *
- * OU → plan_slug mapping (defaultOU/{slug}/b|p|e|pre or similar):
- *   last segment "b"   → basic
- *   last segment "p"   → pro
- *   last segment "e"   → enterprise
- *   last segment "pre" → premium
- *   anything else      → basic (safe default)
+ * OU → plan_slug mapping (last segment of OU path):
+ *   b   → basic
+ *   p   → pro
+ *   e   → enterprise
+ *   pre → premium
+ *   anything else → basic (safe default)
+ *
+ * Billing entity / domain auto-creation:
+ *   - Domain is extracted from user's email (e.g. abc.com)
+ *   - OU structure: /defaultOU/{slug}/b|p|e|pre  — slug becomes company slug
+ *   - If domain not in DB: create billing_entity (name = domain, slug = sanitised domain)
+ *     and domain record, then proceed to upsert users
  *
  * Access: super_admin only.
  */
@@ -27,58 +34,67 @@ class SyncController
 
     public function syncGoogle(Request $req): void
     {
-        $domainId = isset($req->body['domain_id']) ? (int) $req->body['domain_id'] : null;
+        $stats = ['domains_discovered' => 0, 'domains_new' => 0, 'inserted' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
 
-        // Fetch domains to sync
-        if ($domainId) {
-            $domains = Database::query(
-                'SELECT d.*, be.id AS billing_entity_id FROM domains d
-                 JOIN billing_entities be ON be.id = d.billing_entity_id
-                 WHERE d.id = :id AND d.is_active = 1',
-                [':id' => $domainId]
-            );
-            if (!$domains) Response::error('Domain not found.', 404);
-        } else {
-            $domains = Database::query(
-                'SELECT d.*, be.id AS billing_entity_id FROM domains d
-                 JOIN billing_entities be ON be.id = d.billing_entity_id
-                 WHERE d.is_active = 1 ORDER BY d.name'
-            );
+        // Fetch ALL users from Google Workspace in one pass
+        $allUsers = GoogleWorkspaceService::listAllUsers();
+
+        if (empty($allUsers)) {
+            Response::json(['message' => 'No users returned from Google Workspace. Check service account delegation.', 'stats' => $stats]);
+            return;
         }
 
-        $stats = ['domains' => 0, 'inserted' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+        // Group by domain
+        $byDomain = [];
+        foreach ($allUsers as $gu) {
+            $email = $gu['email'];
+            if (!$email || !str_contains($email, '@')) { $stats['skipped']++; continue; }
+            $domain = strtolower(substr($email, strpos($email, '@') + 1));
+            $byDomain[$domain][] = $gu;
+        }
 
-        foreach ($domains as $domain) {
-            $stats['domains']++;
-            try {
-                $googleUsers = GoogleWorkspaceService::listDomainUsers($domain['name']);
+        $stats['domains_discovered'] = count($byDomain);
 
-                foreach ($googleUsers as $gu) {
-                    $email = strtolower($gu['email']);
-                    if (!$email) { $stats['skipped']++; continue; }
+        // Load existing domain records once
+        $domainRows = Database::query('SELECT d.*, be.id AS billing_entity_id FROM domains d JOIN billing_entities be ON be.id = d.billing_entity_id WHERE d.is_active = 1', []);
+        $domainMap  = []; // domain name → row
+        foreach ($domainRows as $dr) {
+            $domainMap[$dr['name']] = $dr;
+        }
 
-                    // Infer plan from OU path
-                    $planSlug = self::inferPlan($gu['ouPath'] ?? '');
+        foreach ($byDomain as $domainName => $users) {
+            // Auto-create billing entity + domain if not known
+            if (!isset($domainMap[$domainName])) {
+                try {
+                    [$beId, $domainId, $ouPath] = self::autoCreateDomain($domainName, $users);
+                    $domainMap[$domainName] = ['id' => $domainId, 'billing_entity_id' => $beId, 'ou_path' => $ouPath, 'name' => $domainName];
+                    $stats['domains_new']++;
+                } catch (Throwable $e) {
+                    Logger::error("[Sync] Auto-create failed for $domainName: " . $e->getMessage());
+                    $stats['errors'][] = ['domain' => $domainName, 'error' => 'auto-create: ' . $e->getMessage()];
+                    continue;
+                }
+            }
 
-                    // Parse names
-                    $firstName = $gu['firstName'] ?? '';
-                    $lastName  = $gu['lastName']  ?? '';
-                    if (!$firstName && !$lastName) {
-                        $parts     = explode('@', $email);
-                        $firstName = $parts[0];
-                    }
+            $dr = $domainMap[$domainName];
 
-                    // Parse dates
-                    $lastLogin   = $gu['lastLogin']  ? date('Y-m-d H:i:s', strtotime($gu['lastLogin']))  : null;
-                    $googleCreated = $gu['createdAt'] ? date('Y-m-d H:i:s', strtotime($gu['createdAt'])) : null;
+            foreach ($users as $gu) {
+                $email = strtolower($gu['email']);
+                $planSlug = self::inferPlan($gu['ouPath'] ?? '');
 
-                    $status = $gu['suspended'] ? 'suspended' : 'active';
+                $firstName = $gu['firstName'] ?? '';
+                $lastName  = $gu['lastName']  ?? '';
+                if (!$firstName && !$lastName) {
+                    $firstName = explode('@', $email)[0];
+                }
 
-                    $existing = Database::queryOne(
-                        'SELECT id FROM workspace_users WHERE email = :email',
-                        [':email' => $email]
-                    );
+                $lastLogin     = $gu['lastLogin']  ? date('Y-m-d H:i:s', strtotime($gu['lastLogin']))  : null;
+                $googleCreated = $gu['createdAt']  ? date('Y-m-d H:i:s', strtotime($gu['createdAt']))  : null;
+                $status        = $gu['suspended']  ? 'suspended' : 'active';
 
+                $existing = Database::queryOne('SELECT id FROM workspace_users WHERE email = :email', [':email' => $email]);
+
+                try {
                     if ($existing) {
                         Database::execute(
                             'UPDATE workspace_users SET
@@ -90,8 +106,8 @@ class SyncController
                                created_via_portal = 0
                              WHERE id = :id',
                             [
-                                ':did'    => $domain['id'],
-                                ':beid'   => $domain['billing_entity_id'],
+                                ':did'    => $dr['id'],
+                                ':beid'   => $dr['billing_entity_id'],
                                 ':fn'     => $firstName,
                                 ':ln'     => $lastName,
                                 ':plan'   => $planSlug,
@@ -113,8 +129,8 @@ class SyncController
                              VALUES (:did, :beid, :fn, :ln, :email,
                                      :plan, :ou, :status, :tsv, :ll, :gc, 0)',
                             [
-                                ':did'    => $domain['id'],
-                                ':beid'   => $domain['billing_entity_id'],
+                                ':did'    => $dr['id'],
+                                ':beid'   => $dr['billing_entity_id'],
                                 ':fn'     => $firstName,
                                 ':ln'     => $lastName,
                                 ':email'  => $email,
@@ -128,22 +144,73 @@ class SyncController
                         );
                         $stats['inserted']++;
                     }
+                } catch (Throwable $e) {
+                    Logger::error("[Sync] User $email failed: " . $e->getMessage());
+                    $stats['errors'][] = ['email' => $email, 'error' => $e->getMessage()];
                 }
-            } catch (Throwable $e) {
-                Logger::error("[Sync] Domain {$domain['name']} failed: " . $e->getMessage());
-                $stats['errors'][] = ['domain' => $domain['name'], 'error' => $e->getMessage()];
             }
         }
 
         AuditService::log(
             'GOOGLE_SYNC', 'staff', $req->user['userId'], $req->user['name'] ?? '', $req->user['role'],
-            $domainId ? "domain:{$domainId}" : 'all_domains',
-            json_encode($stats),
-            $req->ip
+            'all_domains', json_encode($stats), $req->ip
         );
 
         Logger::info("[Sync] Google sync complete — " . json_encode($stats));
         Response::json(['message' => 'Sync complete.', 'stats' => $stats]);
+    }
+
+    /**
+     * Auto-create a billing_entity + domain record for a newly discovered domain.
+     * Uses the OU path to derive a slug (e.g. /defaultOU/abc/b → slug=abc).
+     * Returns [billing_entity_id, domain_id, ou_path].
+     */
+    private static function autoCreateDomain(string $domainName, array $users): array
+    {
+        // Derive slug from first user's OU path: /defaultOU/{slug}/b → slug
+        $ouPath  = '';
+        $slug    = '';
+        foreach ($users as $u) {
+            if (!empty($u['ouPath'])) {
+                $ouPath = $u['ouPath'];
+                $parts  = array_values(array_filter(explode('/', $ouPath)));
+                // Expected: defaultOU / {slug} / {plan_suffix}
+                // Take segment index 1 as the company slug
+                if (count($parts) >= 2) {
+                    $slug = preg_replace('/[^a-z0-9_-]/', '', strtolower($parts[1]));
+                }
+                if ($slug) break;
+            }
+        }
+        if (!$slug) {
+            $slug = preg_replace('/[^a-z0-9_-]/', '', strtolower(explode('.', $domainName)[0]));
+        }
+
+        // The domain's base OU path is /defaultOU/{slug}
+        $domainOuPath = '/defaultOU/' . $slug;
+
+        // Reuse existing billing entity if same slug already exists (multi-domain client)
+        $existingBe = Database::queryOne('SELECT id FROM billing_entities WHERE slug = :slug', [':slug' => $slug]);
+        if ($existingBe) {
+            $beId = $existingBe['id'];
+        } else {
+            $beId = Database::insert(
+                'INSERT INTO billing_entities (name, slug, contact_email, renewal_date, auto_suspend)
+                 VALUES (:name, :slug, :email, DATE_ADD(NOW(), INTERVAL 1 YEAR), 0)',
+                [':name' => $domainName, ':slug' => $slug, ':email' => 'admin@' . $domainName]
+            );
+        }
+
+        // Create domain
+        $domainId = Database::insert(
+            'INSERT INTO domains (billing_entity_id, name, ou_path, is_active)
+             VALUES (:be, :name, :ou, 1)',
+            [':be' => $beId, ':name' => $domainName, ':ou' => $domainOuPath]
+        );
+
+        Logger::info("[Sync] Auto-created billing entity '$domainName' (slug=$slug, beId=$beId) and domain '$domainName' (id=$domainId)");
+
+        return [$beId, $domainId, $domainOuPath];
     }
 
     private static function inferPlan(string $ouPath): string
