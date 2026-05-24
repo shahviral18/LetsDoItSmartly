@@ -384,54 +384,36 @@ class GoogleWorkspaceService
     public static function getLoginHistory(string $email, int $maxResults = 10): array
     {
         try {
-            $reports  = self::getReportsService();
-            $params   = [
-                'userKey'    => $email,
-                'maxResults' => $maxResults,
-                'eventName'  => 'login_success',
-            ];
-            $result   = $reports->activities->listActivities('all', 'login', $params);
-            $events   = [];
+            $reports = self::getReportsService();
+            // Fetch all login events for user (success, failure, logout, suspicious)
+            $result  = $reports->activities->listActivities(
+                $email, 'login', ['maxResults' => $maxResults]
+            );
+            $events  = [];
             foreach ($result->getItems() ?? [] as $item) {
-                $ts     = $item->getId()->getTime();
-                $params = $item->getParameters() ?? [];
-
-                $ip      = '';
-                $isSusp  = false;
-                $device  = '';
-                foreach ($params as $p) {
-                    if ($p->getName() === 'login_type')      $device  = (string) $p->getValue();
-                    if ($p->getName() === 'is_suspicious')   $isSusp  = (bool)   $p->getBoolValue();
+                $loginType  = '';
+                $isSusp     = false;
+                $challenge  = '';
+                foreach ($item->getEvents() as $ev) {
+                    $eventName = $ev->getName();
+                    foreach ($ev->getParameters() ?? [] as $p) {
+                        if ($p->getName() === 'login_type')             $loginType = (string) $p->getValue();
+                        if ($p->getName() === 'is_suspicious')          $isSusp    = (bool)   $p->getBoolValue();
+                        if ($p->getName() === 'login_challenge_method') $challenge = (string) $p->getValue();
+                    }
                 }
-                // IP comes from actor.ipAddress
-                $ip = method_exists($item->getActor(), 'getIpAddress') ? (string)$item->getActor()->getIpAddress() : '';
-
-                $events[] = [
-                    'timestamp'    => $ts,
-                    'ip_address'   => $ip,
-                    'login_type'   => $device,
-                    'is_suspicious'=> $isSusp,
-                    'event_name'   => 'login_success',
-                ];
-            }
-            // Also fetch failed logins
-            $paramsFail = ['userKey' => $email, 'maxResults' => $maxResults, 'eventName' => 'login_failure'];
-            $resultFail = $reports->activities->listActivities('all', 'login', $paramsFail);
-            foreach ($resultFail->getItems() ?? [] as $item) {
                 $events[] = [
                     'timestamp'    => $item->getId()->getTime(),
-                    'ip_address'   => '',
-                    'login_type'   => '',
-                    'is_suspicious'=> false,
-                    'event_name'   => 'login_failure',
+                    'login_type'   => $loginType ?: 'google_password',
+                    'challenge'    => $challenge,
+                    'is_suspicious'=> $isSusp,
+                    'event_name'   => $item->getEvents()[0]->getName() ?? 'login_success',
                 ];
             }
-            // Sort newest first
-            usort($events, fn($a, $b) => strcmp($b['timestamp'], $a['timestamp']));
-            return array_slice($events, 0, $maxResults);
+            return $events;
         } catch (Throwable $e) {
             Logger::error("[GWS] getLoginHistory FAILED → $email: " . $e->getMessage());
-            return [];
+            throw $e;
         }
     }
 

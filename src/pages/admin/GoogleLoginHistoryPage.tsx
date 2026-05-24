@@ -16,8 +16,8 @@ interface GUser {
 
 interface LoginEvent {
   timestamp: string;
-  ip_address: string;
   login_type: string;
+  challenge: string;
   is_suspicious: boolean;
   event_name: string;
 }
@@ -148,7 +148,7 @@ export default function GoogleLoginHistoryPage() {
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-100">
             <h2 className="text-sm font-semibold text-slate-700">Recent Login Activity</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Last 10 login events from Google Workspace</p>
+            <p className="text-xs text-slate-400 mt-0.5">Last 10 login events from Google Workspace. IP addresses are not provided by Google Reports API.</p>
           </div>
 
           {histLoading ? (
@@ -167,8 +167,8 @@ export default function GoogleLoginHistoryPage() {
               <thead>
                 <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide border-b border-slate-100">
                   <th className="text-left px-5 py-3 font-medium">Time</th>
-                  <th className="text-left px-5 py-3 font-medium">IP Address</th>
-                  <th className="text-left px-5 py-3 font-medium">Device / Type</th>
+                  <th className="text-left px-5 py-3 font-medium">Login Method</th>
+                  <th className="text-left px-5 py-3 font-medium hidden md:table-cell">2SV Challenge</th>
                   <th className="text-left px-5 py-3 font-medium">Status</th>
                 </tr>
               </thead>
@@ -176,12 +176,14 @@ export default function GoogleLoginHistoryPage() {
                 {history.map((e, i) => (
                   <tr key={i} className={`hover:bg-slate-50 transition-colors ${e.is_suspicious ? 'bg-red-50/40' : ''}`}>
                     <td className="px-5 py-3.5 text-slate-600 text-xs whitespace-nowrap">{fmtDate(e.timestamp)}</td>
-                    <td className="px-5 py-3.5 font-mono text-xs text-slate-700">{e.ip_address || '—'}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1.5 text-slate-600 text-xs">
                         <DeviceIcon type={e.login_type} />
-                        <span className="capitalize">{e.login_type?.replace(/_/g, ' ') || 'Web browser'}</span>
+                        <span className="capitalize">{e.login_type?.replace(/_/g, ' ') || 'Password'}</span>
                       </div>
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-500 text-xs hidden md:table-cell capitalize">
+                      {e.challenge?.replace(/_/g, ' ') || '—'}
                     </td>
                     <td className="px-5 py-3.5">
                       {e.is_suspicious ? (
@@ -191,6 +193,10 @@ export default function GoogleLoginHistoryPage() {
                       ) : e.event_name === 'login_failure' ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600">
                           <XCircle size={12} /> Failed
+                        </span>
+                      ) : e.event_name === 'logout' ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500">
+                          <LogOut size={12} /> Logged out
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600">
