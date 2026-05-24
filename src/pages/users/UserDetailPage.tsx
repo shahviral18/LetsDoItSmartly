@@ -1,13 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Monitor, Smartphone, Tablet, LogOut } from 'lucide-react';
-import {
-  mockUsers,
-  mockEmailAliases,
-  mockGroups,
-  mockAccountEvents,
-  mockDevices,
-} from '../../mock/data';
+import { ArrowLeft, Loader2 } from 'lucide-react';
+import { api } from '../../lib/api';
 
 const planColors: Record<string, string> = {
   basic:      'bg-slate-100 text-slate-600',
@@ -17,88 +11,136 @@ const planColors: Record<string, string> = {
 };
 
 const statusStyles: Record<string, string> = {
-  active:    'bg-green-50 text-green-700',
-  suspended: 'bg-red-50 text-red-600',
-  pending:   'bg-amber-50 text-amber-700',
+  active:          'bg-green-50 text-green-700',
+  suspended:       'bg-red-50 text-red-600',
+  pending:         'bg-amber-50 text-amber-700',
+  deleted_pending: 'bg-orange-50 text-orange-700',
+  deleted:         'bg-slate-100 text-slate-500',
 };
 
-const eventIcons: Record<string, string> = {
-  created:        '✦',
-  suspended:      '⊘',
-  reactivated:    '✔',
-  plan_changed:   '↑',
-  password_reset: '🔑',
-  login_failed:   '✗',
-  '2sv_enabled':  '🛡',
-  '2sv_disabled': '⚠',
-};
+interface ApiUser {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  domain_name: string;
+  plan_slug: string;
+  status: string;
+  last_login_at?: string;
+  two_sv_enabled: number;
+  storage_used_mb: number;
+  storage_total_mb: number;
+  ou_path?: string;
+  created_at?: string;
+  deletion_requested_at?: string;
+}
 
-const eventColors: Record<string, string> = {
-  created:        'text-green-600 bg-green-50',
-  suspended:      'text-red-600 bg-red-50',
-  reactivated:    'text-green-600 bg-green-50',
-  plan_changed:   'text-blue-600 bg-blue-50',
-  password_reset: 'text-amber-600 bg-amber-50',
-  login_failed:   'text-red-600 bg-red-50',
-  '2sv_enabled':  'text-green-600 bg-green-50',
-  '2sv_disabled': 'text-red-600 bg-red-50',
-};
-
-const groupRoleColors: Record<string, string> = {
-  owner:   'bg-purple-50 text-purple-700',
-  manager: 'bg-blue-50 text-blue-700',
-  member:  'bg-slate-100 text-slate-600',
-};
-
-function formatDate(iso: string) {
+function formatDate(iso?: string) {
+  if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function DeviceIcon({ type }: { type: string }) {
-  if (type === 'mobile') return <Smartphone size={16} className="text-slate-400" />;
-  if (type === 'tablet') return <Tablet size={16} className="text-slate-400" />;
-  return <Monitor size={16} className="text-slate-400" />;
+function formatShortDate(iso?: string) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function mbToGb(mb: number) {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }
 
 export function UserDetailPage() {
-  const { userId } = useParams<{ userId: string }>();
-  const user = mockUsers.find(u => u.id === userId);
+  const { id } = useParams<{ id: string }>();
+  const [user, setUser] = useState<ApiUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [actionMsg, setActionMsg] = useState('');
+  const [actionErr, setActionErr] = useState('');
 
-  const [loggedOutDevices, setLoggedOutDevices] = useState<Set<string>>(new Set());
-  const [allLoggedOut, setAllLoggedOut] = useState(false);
+  // Delete flow state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<'idle' | 'otp-sent' | 'confirming'>('idle');
+  const [devOtp, setDevOtp] = useState('');
+  const [otpInput, setOtpInput] = useState('');
+  const [otpSentTo, setOtpSentTo] = useState<string[]>([]);
 
-  if (!user) {
+  useEffect(() => {
+    if (!id) return;
+    api.get<ApiUser>(`/workspace-users/${id}`)
+      .then(data => setUser(data))
+      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load user'))
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  async function doAction(action: string, extra?: Record<string, unknown>) {
+    setActionMsg('');
+    setActionErr('');
+    try {
+      const res = await api.patch<{ message: string; temp_password?: string }>(`/workspace-users/${id}/action`, { action, ...extra });
+      setActionMsg(res.message);
+      if (res.temp_password) {
+        alert(`New temporary password: ${res.temp_password}\n\nShare this with the user securely.`);
+      }
+      // Refresh user
+      const updated = await api.get<ApiUser>(`/workspace-users/${id}`);
+      setUser(updated);
+    } catch (err: unknown) {
+      setActionErr(err instanceof Error ? err.message : 'Action failed');
+    }
+  }
+
+  async function requestDelete() {
+    setActionErr('');
+    try {
+      const res = await api.patch<{ message: string; otp_sent_to: string[]; _dev_otp?: string }>(`/workspace-users/${id}/action`, { action: 'archive' });
+      setOtpSentTo(res.otp_sent_to ?? []);
+      setDevOtp(res._dev_otp ?? '');
+      setDeleteStep('otp-sent');
+    } catch (err: unknown) {
+      setActionErr(err instanceof Error ? err.message : 'Failed to send OTP');
+    }
+  }
+
+  async function confirmDelete() {
+    if (!otpInput.trim()) return;
+    setDeleteStep('confirming');
+    try {
+      const res = await api.patch<{ message: string }>(`/workspace-users/${id}/action`, { action: 'archive-confirm', otp: otpInput.trim() });
+      setActionMsg(res.message);
+      setShowDeleteConfirm(false);
+      setDeleteStep('idle');
+      const updated = await api.get<ApiUser>(`/workspace-users/${id}`);
+      setUser(updated);
+    } catch (err: unknown) {
+      setActionErr(err instanceof Error ? err.message : 'Invalid OTP or confirmation failed');
+      setDeleteStep('otp-sent');
+    }
+  }
+
+  if (loading) {
     return (
-      <div className="text-center py-16">
-        <p className="text-slate-500">User not found.</p>
-        <Link to="/app/users" className="text-[#1A7DC4] text-sm mt-2 inline-block">← Back to Users</Link>
+      <div className="flex items-center justify-center py-16">
+        <Loader2 size={24} className="animate-spin text-[#1A7DC4]" />
       </div>
     );
   }
 
-  const aliases = mockEmailAliases.filter(a => a.userId === userId);
-  const groups = mockGroups.filter(g => g.userId === userId);
-  const events = mockAccountEvents.filter(e => e.userId === userId).sort((a, b) =>
-    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-  const devices = mockDevices.filter(d => d.userId === userId);
-
-  function logoutDevice(deviceId: string) {
-    setLoggedOutDevices(prev => new Set([...prev, deviceId]));
+  if (error || !user) {
+    return (
+      <div className="text-center py-16">
+        <p className="text-slate-500">{error || 'User not found.'}</p>
+        <Link to="/users" className="text-[#1A7DC4] text-sm mt-2 inline-block">← Back to Users</Link>
+      </div>
+    );
   }
 
-  function logoutAll() {
-    setAllLoggedOut(true);
-    setLoggedOutDevices(new Set(devices.map(d => d.id)));
-  }
-
-  const initials = `${user.firstName[0]}${user.lastName[0]}`;
+  const initials = `${user.first_name[0] ?? ''}${user.last_name[0] ?? ''}`.toUpperCase();
+  const isDeletedPending = user.status === 'deleted_pending';
 
   return (
     <div className="max-w-5xl space-y-6">
-      {/* Back + header */}
       <div>
-        <Link to="/app/users" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-[#1A7DC4] transition-colors mb-4">
+        <Link to="/users" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-[#1A7DC4] transition-colors mb-4">
           <ArrowLeft size={14} /> Back to Users
         </Link>
         <div className="flex items-start gap-4">
@@ -110,155 +152,136 @@ export function UserDetailPage() {
           </div>
           <div className="flex-1">
             <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-xl font-semibold text-slate-800">{user.firstName} {user.lastName}</h1>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${statusStyles[user.status]}`}>
-                {user.status}
+              <h1 className="text-xl font-semibold text-slate-800">{user.first_name} {user.last_name}</h1>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${statusStyles[user.status] ?? ''}`}>
+                {user.status.replace('_', ' ')}
               </span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${planColors[user.plan]}`}>
-                {user.plan}
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${planColors[user.plan_slug] ?? ''}`}>
+                {user.plan_slug}
               </span>
             </div>
-            <p className="text-sm text-slate-500 mt-1">{user.email} · {user.domain}</p>
+            <p className="text-sm text-slate-500 mt-1">{user.email} · {user.domain_name}</p>
           </div>
         </div>
       </div>
 
+      {actionMsg && (
+        <div className="px-4 py-2.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">{actionMsg}</div>
+      )}
+      {actionErr && (
+        <div className="px-4 py-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{actionErr}</div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column */}
+        {/* Left: Profile card */}
         <div className="lg:col-span-1 space-y-5">
-          {/* Profile card */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
             <h2 className="text-sm font-semibold text-slate-700">Profile</h2>
             <InfoRow label="Email" value={user.email} />
-            <InfoRow label="Domain" value={user.domain} />
-            <InfoRow label="Plan" value={user.plan.charAt(0).toUpperCase() + user.plan.slice(1)} />
-            <InfoRow label="Created" value={new Date(user.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
-            <InfoRow label="Last Login" value={user.lastLogin ? formatDate(user.lastLogin) : '—'} />
-            <InfoRow label="2SV" value={user.twoSVEnabled ? 'Enabled ✓' : 'Disabled ✗'} valueColor={user.twoSVEnabled ? 'text-green-600' : 'text-red-500'} />
-            <InfoRow label="Storage" value={`${user.storageUsed} / ${user.storageTotal}`} />
-          </div>
-
-          {/* Email Aliases */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h2 className="text-sm font-semibold text-slate-700 mb-3">Email Aliases</h2>
-            {aliases.length === 0 ? (
-              <p className="text-xs text-slate-400">No aliases</p>
-            ) : (
-              <ul className="space-y-2">
-                {aliases.map(a => (
-                  <li key={a.id} className="text-sm text-slate-600 flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#29ABE2] shrink-0" />
-                    {a.alias}
-                  </li>
-                ))}
-              </ul>
+            <InfoRow label="Domain" value={user.domain_name} />
+            <InfoRow label="Plan" value={user.plan_slug.charAt(0).toUpperCase() + user.plan_slug.slice(1)} />
+            <InfoRow label="OU Path" value={user.ou_path ?? '—'} />
+            <InfoRow label="Created" value={formatShortDate(user.created_at)} />
+            <InfoRow label="Last Login" value={formatDate(user.last_login_at)} />
+            <InfoRow label="2SV" value={user.two_sv_enabled ? 'Enabled ✓' : 'Disabled ✗'} valueColor={user.two_sv_enabled ? 'text-green-600' : 'text-red-500'} />
+            <InfoRow label="Storage" value={`${mbToGb(user.storage_used_mb)} / ${mbToGb(user.storage_total_mb)}`} />
+            {isDeletedPending && user.deletion_requested_at && (
+              <InfoRow
+                label="Deletion date"
+                value={formatShortDate(new Date(new Date(user.deletion_requested_at).getTime() + 30 * 86400000).toISOString())}
+                valueColor="text-orange-600"
+              />
             )}
           </div>
 
-          {/* Group Memberships */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h2 className="text-sm font-semibold text-slate-700 mb-3">Group Memberships</h2>
-            {groups.length === 0 ? (
-              <p className="text-xs text-slate-400">No groups</p>
-            ) : (
-              <ul className="space-y-2.5">
-                {groups.map(g => (
-                  <li key={g.id} className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-medium text-slate-700">{g.groupName}</div>
-                      <div className="text-xs text-slate-400">{g.groupEmail}</div>
-                    </div>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize shrink-0 ${groupRoleColors[g.role]}`}>
-                      {g.role}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+          {/* Actions */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
+            <h2 className="text-sm font-semibold text-slate-700 mb-3">Actions</h2>
+            {user.status === 'active' && (
+              <ActionButton label="Suspend User" color="red" onClick={() => doAction('suspend')} />
+            )}
+            {user.status === 'suspended' && (
+              <ActionButton label="Activate User" color="green" onClick={() => doAction('unsuspend')} />
+            )}
+            {isDeletedPending && (
+              <ActionButton label="Recover User" color="green" onClick={() => doAction('restore')} />
+            )}
+            {user.status === 'active' && (
+              <ActionButton label="Reset Password" color="amber" onClick={() => doAction('reset-password')} />
+            )}
+            {!isDeletedPending && user.status !== 'deleted' && (
+              <ActionButton label="Delete User…" color="red" onClick={() => { setShowDeleteConfirm(true); setDeleteStep('idle'); setActionErr(''); setOtpInput(''); }} />
             )}
           </div>
         </div>
 
-        {/* Right column */}
+        {/* Right: Info */}
         <div className="lg:col-span-2 space-y-5">
-          {/* Account Status Timeline */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h2 className="text-sm font-semibold text-slate-700 mb-4">Account Timeline</h2>
-            {events.length === 0 ? (
-              <p className="text-xs text-slate-400">No events</p>
-            ) : (
-              <div className="relative pl-8">
-                <div className="absolute left-3 top-2 bottom-2 w-px bg-slate-100" />
-                <ul className="space-y-4">
-                  {events.map(ev => (
-                    <li key={ev.id} className="relative">
-                      <div className={`absolute -left-5 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${eventColors[ev.type]}`}>
-                        {eventIcons[ev.type] ?? '·'}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-800">{ev.description}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          {formatDate(ev.timestamp)}
-                          {ev.actor && <span className="ml-1">· by <span className="text-slate-600">{ev.actor}</span></span>}
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          {/* Logged-in Devices */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-slate-700">Logged-in Devices</h2>
-              {devices.length > 1 && !allLoggedOut && (
-                <button
-                  onClick={logoutAll}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
-                >
-                  <LogOut size={12} /> Sign out all
-                </button>
-              )}
-            </div>
-            {devices.length === 0 ? (
-              <p className="text-xs text-slate-400">No active devices</p>
-            ) : (
-              <ul className="divide-y divide-slate-50">
-                {devices.map(d => {
-                  const isOut = loggedOutDevices.has(d.id);
-                  return (
-                    <li key={d.id} className={`py-3 flex items-center gap-3 ${isOut ? 'opacity-40' : ''}`}>
-                      <DeviceIcon type={d.type} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-slate-800">{d.name}</span>
-                          {d.isCurrent && !isOut && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-700 font-medium">Current</span>
-                          )}
-                          {isOut && <span className="text-xs text-slate-400">(Signed out)</span>}
-                        </div>
-                        <p className="text-xs text-slate-400 mt-0.5 truncate">
-                          {d.os} · {d.browser} · {d.location} · {d.ip}
-                        </p>
-                        <p className="text-xs text-slate-400">Last active: {formatDate(d.lastActive)}</p>
-                      </div>
-                      {!isOut && !d.isCurrent && (
-                        <button
-                          onClick={() => logoutDevice(d.id)}
-                          className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
-                        >
-                          <LogOut size={11} /> Sign out
-                        </button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <h2 className="text-sm font-semibold text-slate-700 mb-3">Account Details</h2>
+            <p className="text-sm text-slate-500">
+              {isDeletedPending
+                ? 'This account is pending permanent deletion. It is suspended in Google Workspace. You can recover it within 30 days.'
+                : 'Login history, devices, aliases, and group memberships will be available once Google Reports API integration is complete.'}
+            </p>
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-slate-800">Delete User</h3>
+            {deleteStep === 'idle' && (
+              <>
+                <p className="text-sm text-slate-600">
+                  This will suspend <strong>{user.email}</strong> in Google Workspace and free the license immediately.
+                  The account can be recovered within 30 days.
+                </p>
+                <p className="text-sm text-slate-600">
+                  An OTP will be sent to the billing entity contact for confirmation.
+                </p>
+                {actionErr && <p className="text-sm text-red-600">{actionErr}</p>}
+                <div className="flex gap-3">
+                  <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+                  <button onClick={requestDelete} className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600">Send OTP</button>
+                </div>
+              </>
+            )}
+            {(deleteStep === 'otp-sent' || deleteStep === 'confirming') && (
+              <>
+                <p className="text-sm text-slate-600">OTP sent to: <strong>{otpSentTo.join(', ')}</strong></p>
+                {devOtp && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Dev mode — OTP: <strong>{devOtp}</strong>
+                  </p>
+                )}
+                <input
+                  type="text"
+                  placeholder="Enter 6-digit OTP"
+                  value={otpInput}
+                  onChange={e => setOtpInput(e.target.value)}
+                  maxLength={6}
+                  className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 tracking-widest text-center font-mono"
+                />
+                {actionErr && <p className="text-sm text-red-600">{actionErr}</p>}
+                <div className="flex gap-3">
+                  <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+                  <button
+                    onClick={confirmDelete}
+                    disabled={deleteStep === 'confirming' || otpInput.length < 6}
+                    className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    {deleteStep === 'confirming' ? <><Loader2 size={14} className="animate-spin" /> Confirming…</> : 'Confirm Delete'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -267,8 +290,21 @@ function InfoRow({ label, value, valueColor = 'text-slate-800' }: { label: strin
   return (
     <div className="flex justify-between items-start gap-3">
       <span className="text-xs text-slate-500 shrink-0">{label}</span>
-      <span className={`text-sm font-medium text-right ${valueColor}`}>{value}</span>
+      <span className={`text-sm font-medium text-right break-all ${valueColor}`}>{value}</span>
     </div>
+  );
+}
+
+function ActionButton({ label, color, onClick }: { label: string; color: 'red' | 'green' | 'amber'; onClick: () => void }) {
+  const cls = {
+    red:   'text-red-600 bg-red-50 hover:bg-red-100 border-red-200',
+    green: 'text-green-700 bg-green-50 hover:bg-green-100 border-green-200',
+    amber: 'text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-200',
+  }[color];
+  return (
+    <button onClick={onClick} className={`w-full px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${cls}`}>
+      {label}
+    </button>
   );
 }
 
