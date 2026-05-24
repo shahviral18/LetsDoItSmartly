@@ -72,20 +72,37 @@ $router->get('/api/health', function (Request $req) {
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
 $router->get('/api/dashboard/stats', function (Request $req) {
-    $totalUsers   = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE status != "deleted"', [])['n'];
-    $activeUsers  = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE status = "active"', [])['n'];
-    $totalDomains = (int) Database::queryOne('SELECT COUNT(*) AS n FROM domains WHERE is_active = 1', [])['n'];
-    $totalBe      = (int) Database::queryOne('SELECT COUNT(*) AS n FROM billing_entities', [])['n'];
-    $pendingInv   = (int) Database::queryOne('SELECT COUNT(*) AS n FROM invoices WHERE status = "pending"', [])['n'];
-    $totalRev     = (float) (Database::queryOne('SELECT COALESCE(SUM(amount),0) AS s FROM invoices WHERE status = "paid"', [])['s'] ?? 0);
-    $no2sv        = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE two_sv_enabled = 0 AND status = "active"', [])['n'];
+    $role = $req->user['role'];
 
-    // License pools per billing entity
+    // For domain owners, scope all stats to their billing entity
+    $beId = null;
+    if ($role === 'domain_owner') {
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        $beId = $pu['billing_entity_id'] ?? null;
+    }
+
+    $beFilter  = $beId ? 'AND wu.billing_entity_id = :be' : '';
+    $beParams  = $beId ? [':be' => $beId] : [];
+    $dFilter   = $beId ? 'AND d.billing_entity_id = :be' : '';
+    $invFilter = $beId ? 'AND billing_entity_id = :be' : '';
+
+    $totalUsers   = (int) Database::queryOne("SELECT COUNT(*) AS n FROM workspace_users wu WHERE status != 'deleted' $beFilter", $beParams)['n'];
+    $activeUsers  = (int) Database::queryOne("SELECT COUNT(*) AS n FROM workspace_users wu WHERE status = 'active' $beFilter", $beParams)['n'];
+    $totalDomains = (int) Database::queryOne("SELECT COUNT(*) AS n FROM domains d WHERE is_active = 1 $dFilter", $beParams)['n'];
+    $no2sv        = (int) Database::queryOne("SELECT COUNT(*) AS n FROM workspace_users wu WHERE two_sv_enabled = 0 AND status = 'active' $beFilter", $beParams)['n'];
+
+    // Staff-only: billing-wide totals
+    $totalBe    = $beId ? 1 : (int) Database::queryOne('SELECT COUNT(*) AS n FROM billing_entities', [])['n'];
+    $pendingInv = (int) Database::queryOne("SELECT COUNT(*) AS n FROM invoices WHERE status = 'pending' $invFilter", $beParams)['n'];
+    $totalRev   = (float) (Database::queryOne("SELECT COALESCE(SUM(amount),0) AS s FROM invoices WHERE status = 'paid' $invFilter", $beParams)['s'] ?? 0);
+
+    // License pools
+    $poolWhere = $beId ? 'WHERE lp.billing_entity_id = :be' : '';
     $pools = Database::query(
-        'SELECT be.name, be.slug, lp.plan_slug, lp.allocated, lp.used
+        "SELECT be.name, be.slug, lp.plan_slug, lp.allocated, lp.used
          FROM license_pool lp JOIN billing_entities be ON be.id = lp.billing_entity_id
-         ORDER BY be.name, lp.plan_slug',
-        []
+         $poolWhere ORDER BY be.name, lp.plan_slug",
+        $beParams
     );
     $poolMap = [];
     foreach ($pools as $p) {

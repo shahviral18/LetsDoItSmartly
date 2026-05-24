@@ -6,8 +6,9 @@ class WorkspaceUserController
     public function list(Request $req): void
     {
         $user   = $req->user;
-        $domain = $req->query['domain'] ?? null;
-        $status = $req->query['status'] ?? null;
+        $domain   = $req->query['domain']    ?? null;
+        $domainId = isset($req->query['domain_id']) ? (int)$req->query['domain_id'] : null;
+        $status   = $req->query['status']    ?? null;
 
         $where  = ['1=1']; $params = [];
 
@@ -18,7 +19,8 @@ class WorkspaceUserController
             $params[':be']        = $pu['billing_entity_id'];
         }
 
-        if ($domain) { $where[] = 'd.name = :domain'; $params[':domain'] = $domain; }
+        if ($domainId) { $where[] = 'wu.domain_id = :did'; $params[':did'] = $domainId; }
+        elseif ($domain) { $where[] = 'd.name = :domain'; $params[':domain'] = $domain; }
         if ($status) { $where[] = 'wu.status = :status'; $params[':status'] = $status; }
 
         $sql = 'SELECT wu.*, d.name AS domain_name

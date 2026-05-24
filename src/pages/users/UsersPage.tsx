@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Search, Plus, ChevronDown, RefreshCw, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
+import { useDomain } from '../../context/DomainContext';
 import { CreateUserModal } from './CreateUserModal';
 import type { PortalUser } from '../../types';
 
@@ -63,6 +64,8 @@ function toPortalUser(u: ApiUser): PortalUser {
 export function UsersPage() {
   const { user: authUser } = useAuth();
   const isSuperAdmin = authUser?.role === 'super_admin';
+  const isDomainOwner = authUser?.role === 'domain_owner';
+  const { selectedDomain } = useDomain();
 
   const [users, setUsers] = useState<PortalUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,14 +83,15 @@ export function UsersPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get<{ data: ApiUser[] }>('/workspace-users');
+      const params = isDomainOwner && selectedDomain ? `?domain_id=${selectedDomain.id}` : '';
+      const res = await api.get<{ data: ApiUser[] }>(`/workspace-users${params}`);
       setUsers(res.data.map(toPortalUser));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load users');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isDomainOwner, selectedDomain?.id]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
