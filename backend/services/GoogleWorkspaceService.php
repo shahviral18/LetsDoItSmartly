@@ -19,6 +19,8 @@ class GoogleWorkspaceService
     private const SCOPES = [
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.orgunit',
+    ];
+    private const REPORTS_SCOPES = [
         'https://www.googleapis.com/auth/admin.reports.audit.readonly',
         'https://www.googleapis.com/auth/admin.reports.usage.readonly',
     ];

@@ -42,6 +42,8 @@ require BASE_PATH . '/controllers/InvoiceController.php';
 require BASE_PATH . '/controllers/PaymentController.php';
 require BASE_PATH . '/controllers/DistributorController.php';
 require BASE_PATH . '/controllers/BccController.php';
+require BASE_PATH . '/controllers/SyncController.php';
+require BASE_PATH . '/controllers/PortalUserController.php';
 
 // ── Global error handler ──────────────────────────────────────────────────────
 set_exception_handler(function (Throwable $e) {
@@ -156,6 +158,19 @@ $router->get  ('/api/bcc-requests',        [BccController::class, 'list'],      
 $router->post ('/api/bcc-requests',        [BccController::class, 'create'],     [...$auth, AuthMiddleware::authorize(['domain_owner'])]);
 $router->get  ('/api/bcc-requests/:id',    [BccController::class, 'get'],        $auth);
 $router->patch('/api/bcc-requests/:id',    [BccController::class, 'updateStatus'], AuthMiddleware::staffOnly(['super_admin','admin','support_admin']));
+
+// ── Google Sync (super_admin only) ───────────────────────────────────────────
+$router->post('/api/admin/sync-google', [SyncController::class, 'syncGoogle'], $superAdmin);
+
+// ── Portal Users (domain_owner accounts) ─────────────────────────────────────
+$portalUserWrite = AuthMiddleware::staffOnly(['super_admin', 'admin']);
+$portalUserRead  = AuthMiddleware::staffOnly(['super_admin', 'admin', 'support_admin']);
+$router->get  ('/api/portal-users',                        [PortalUserController::class, 'list'],                $portalUserRead);
+$router->post ('/api/portal-users',                        [PortalUserController::class, 'create'],              $portalUserWrite);
+$router->get  ('/api/portal-users/:id',                    [PortalUserController::class, 'get'],                 $portalUserRead);
+$router->patch('/api/portal-users/:id',                    [PortalUserController::class, 'update'],              $portalUserWrite);
+$router->post ('/api/portal-users/:id/reset-password',     [PortalUserController::class, 'resetPassword'],       $portalUserWrite);
+$router->patch('/api/portal-users/:id/assign-entity',      [PortalUserController::class, 'assignBillingEntity'], $portalUserWrite);
 
 // ── Admin: config ─────────────────────────────────────────────────────────────
 $router->get  ('/api/admin/config',       function (Request $req) {
