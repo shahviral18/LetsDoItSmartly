@@ -20,6 +20,8 @@ import AuditLogPage from './pages/admin/AuditLogPage';
 import SuperAdminPanel from './pages/admin/SuperAdminPanel';
 import DistributorDashboardPage from './pages/distributor/DistributorDashboardPage';
 import BackofficePage from './pages/admin/BackofficePage';
+import EmailSurveillancePage from './pages/surveillance/EmailSurveillancePage';
+import BccRequestDetailPage from './pages/surveillance/BccRequestDetailPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -56,6 +58,8 @@ function AppRoutes() {
         <Route path="/admin/coupons" element={<SuperAdminPanel />} />
         <Route path="/distributor/clients" element={<DistributorDashboardPage />} />
         <Route path="/distributors" element={<BackofficePage />} />
+        <Route path="/surveillance" element={<EmailSurveillancePage />} />
+        <Route path="/surveillance/:id" element={<BccRequestDetailPage />} />
       </Route>
 
       <Route path="/" element={<Navigate to="/dashboard" replace />} />

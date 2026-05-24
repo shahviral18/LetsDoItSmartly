@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { LayoutDashboard, Users, Globe, Shield, CreditCard, FileText, ScrollText, Settings, ChevronLeft, ChevronRight, LogOut, ChevronDown, Handshake, BarChart3, Bell, Tag, Building2, X } from "lucide-react";
+import { LayoutDashboard, Users, Globe, Shield, CreditCard, FileText, ScrollText, Settings, ChevronLeft, ChevronRight, LogOut, ChevronDown, Handshake, BarChart3, Bell, Tag, Building2, X, Eye } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAuth } from "../../context/AuthContext";
 import type { Role } from "../../types";
@@ -15,6 +15,7 @@ const navGroups = [
     { label: "Domains", href: "/domains", icon: Globe, roles: ["super_admin","admin","account_manager","domain_owner"] },
     { label: "Storage", href: "/storage", icon: BarChart3, roles: ["super_admin","admin","account_manager","domain_owner"] },
     { label: "Shared Drives", href: "/shared-drives", icon: Building2, roles: ["super_admin","admin","account_manager","domain_owner"] },
+    { label: "Email Surveillance", href: "/surveillance", icon: Eye, roles: ["super_admin","admin","support_admin","domain_owner"] },
   ]},
   { label: "BILLING", items: [
     { label: "Buy Licenses", href: "/billing/buy", icon: CreditCard, roles: ["super_admin","admin","backoffice","domain_owner"] },

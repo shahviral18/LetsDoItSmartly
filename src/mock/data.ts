@@ -262,3 +262,48 @@ export const mockAuditLog: AuditLogEntry[] = [
   { id: 'al11', actorId: '1', actorName: 'Viral Shah', actorRole: 'super_admin', action: 'coupon_deleted', target: 'EXPIRED50', detail: 'Expired coupon removed from system', timestamp: '2026-04-30T15:00:00Z' },
   { id: 'al12', actorId: '3', actorName: 'Raj Patel', actorRole: 'account_manager', action: 'domain_added', target: 'abctech.com', detail: 'New domain added to ABC Pvt Ltd billing entity', timestamp: '2026-04-28T09:45:00Z' },
 ];
+
+import type { BccRequest } from '../types';
+
+export const mockBccRequests: BccRequest[] = [
+  {
+    id: 'bcc1',
+    domain: 'abc.com',
+    ouPath: 'defaultOU/abc/b',
+    billingEntityId: 'be1',
+    affectedUsers: ['sales@abc.com', 'purchase@abc.com'],
+    surveillanceEmail: 'data@abc.com',
+    directions: ['outbound', 'inbound'],
+    status: 'completed',
+    requestedBy: 'u8',
+    requestedAt: '2026-05-20T10:00:00Z',
+    completedBy: 'Sneha Joshi',
+    completedAt: '2026-05-21T14:30:00Z',
+    notes: 'Configured for Basic OU only.',
+  },
+  {
+    id: 'bcc2',
+    domain: 'abctech.com',
+    ouPath: 'defaultOU/abc/p',
+    billingEntityId: 'be1',
+    affectedUsers: 'all',
+    surveillanceEmail: 'compliance@abc.com',
+    directions: ['outbound', 'internal_sending', 'inbound', 'internal_receiving'],
+    status: 'pending',
+    requestedBy: 'u8',
+    requestedAt: '2026-05-24T08:00:00Z',
+  },
+  {
+    id: 'bcc3',
+    domain: 'xyz.in',
+    ouPath: 'defaultOU/xyz/e',
+    billingEntityId: 'be2',
+    affectedUsers: ['arjun@xyz.in'],
+    surveillanceEmail: 'audit@xyz.in',
+    directions: ['outbound'],
+    status: 'in_progress',
+    requestedBy: 'u5',
+    requestedAt: '2026-05-23T16:00:00Z',
+    notes: 'Awaiting Google Admin access.',
+  },
+];

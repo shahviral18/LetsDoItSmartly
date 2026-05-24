@@ -185,3 +185,22 @@ export interface Coupon {
   active: boolean;
   usageCount: number;
 }
+
+export type BccDirection = 'outbound' | 'inbound' | 'internal_sending' | 'internal_receiving';
+export type BccStatus = 'pending' | 'in_progress' | 'completed' | 'rejected';
+
+export interface BccRequest {
+  id: string;
+  domain: string;
+  ouPath: string;
+  billingEntityId: string;
+  affectedUsers: 'all' | string[];
+  surveillanceEmail: string;
+  directions: BccDirection[];
+  status: BccStatus;
+  requestedBy: string;
+  requestedAt: string;
+  completedBy?: string;
+  completedAt?: string;
+  notes?: string;
+}
