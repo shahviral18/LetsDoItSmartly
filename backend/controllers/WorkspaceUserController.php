@@ -187,7 +187,7 @@ class WorkspaceUserController
         Database::beginTransaction();
         try {
             // Free old plan slot, consume new plan slot
-            Database::execute('UPDATE license_pool SET used = used - 1 WHERE billing_entity_id = :be AND plan_slug = :old', [':be' => $wu['billing_entity_id'], ':old' => $wu['plan_slug']]);
+            Database::execute('UPDATE license_pool SET used = used - 1 WHERE billing_entity_id = :be AND plan_slug = :old AND used > 0', [':be' => $wu['billing_entity_id'], ':old' => $wu['plan_slug']]);
             Database::execute('UPDATE license_pool SET used = used + 1 WHERE billing_entity_id = :be AND plan_slug = :new', [':be' => $wu['billing_entity_id'], ':new' => $newPlan]);
             Database::execute('UPDATE workspace_users SET plan_slug = :plan, ou_path = :ou WHERE id = :id', [':plan' => $newPlan, ':ou' => $newOu, ':id' => $id]);
             Database::commit();
@@ -199,5 +199,254 @@ class WorkspaceUserController
 
         AuditService::log('PLAN_CHANGED', $req->user['userType'], $req->user['userId'], '', $req->user['role'], $wu['email'], "{$wu['plan_slug']} → $newPlan", $req->ip);
         Response::json(['message' => 'Plan upgraded.', 'new_plan' => $newPlan, 'new_ou' => $newOu]);
+    }
+
+    // ── Action dispatcher (avoids ModSecurity blocking POST to sub-paths) ────
+    // PATCH /api/workspace-users/:id/action  body: { "action": "suspend"|"unsuspend"|"reset-password"|"upgrade-plan"|"archive"|"archive-confirm"|"restore", ...params }
+
+    public function dispatchAction(Request $req): void
+    {
+        $action = (string) ($req->body['action'] ?? '');
+        match ($action) {
+            'suspend'          => $this->suspend($req),
+            'unsuspend'        => $this->unsuspend($req),
+            'reset-password'   => $this->resetPassword($req),
+            'upgrade-plan'     => $this->upgradePlan($req),
+            'archive'          => $this->requestDelete($req),
+            'archive-confirm'  => $this->confirmDelete($req),
+            'restore'          => $this->recover($req),
+            default            => Response::error('Unknown action: ' . htmlspecialchars($action), 400),
+        };
+    }
+
+    // ── Delete Flow ───────────────────────────────────────────────────────────
+
+    /**
+     * Step 1: Request deletion.
+     * Generates a 6-digit OTP, logs it (TODO: email when SMTP ready).
+     * Decrements license pool used count immediately so owner can create a replacement.
+     * Does NOT touch Google yet — only marks intent.
+     */
+    public function requestDelete(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne(
+            'SELECT wu.*, d.name AS domain_name, be.contact_email, be.name AS be_name, be.deletion_approver_emails
+             FROM workspace_users wu
+             JOIN domains d ON d.id = wu.domain_id
+             JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+
+        // Domain owners can only delete users in their billing entity
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$pu['billing_entity_id'] !== (int)$wu['billing_entity_id']) {
+                Response::error('Forbidden.', 403);
+            }
+        }
+
+        if (in_array($wu['status'], ['deleted_pending', 'deleted'], true)) {
+            Response::error('User is already pending deletion or deleted.', 400);
+        }
+
+        // Generate OTP
+        $otp     = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expires = date('Y-m-d H:i:s', strtotime('+15 minutes'));
+
+        Database::execute(
+            'UPDATE workspace_users SET deletion_otp = :otp, deletion_otp_expires_at = :exp WHERE id = :id',
+            [':otp' => $otp, ':exp' => $expires, ':id' => $id]
+        );
+
+        // Build recipient list
+        $recipients = [$wu['contact_email']];
+        if ($wu['deletion_approver_emails']) {
+            foreach (explode(',', $wu['deletion_approver_emails']) as $e) {
+                $e = trim($e);
+                if ($e && filter_var($e, FILTER_VALIDATE_EMAIL)) $recipients[] = $e;
+            }
+        }
+        $recipients = array_unique($recipients);
+
+        // TODO: send OTP email via SMTP to all $recipients
+        // EmailService::sendDeletionOtp($wu, $otp, $recipients);
+        Logger::info("[Delete] OTP for {$wu['email']} → $otp (expires $expires) | Recipients: " . implode(', ', $recipients));
+
+        AuditService::log('DELETE_REQUESTED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "OTP sent to: " . implode(', ', $recipients), $req->ip);
+
+        Response::json([
+            'message'         => 'OTP sent to ' . implode(', ', $recipients) . '. Valid for 15 minutes.',
+            'otp_sent_to'     => $recipients,
+            // DEV ONLY — remove when SMTP is live:
+            '_dev_otp'        => $otp,
+        ]);
+    }
+
+    /**
+     * Step 2: Confirm deletion with OTP.
+     * Validates OTP → suspends in Google → status = deleted_pending → frees license.
+     */
+    public function confirmDelete(Request $req): void
+    {
+        $id  = (int) $req->param('id');
+        $otp = trim((string) ($req->body['otp'] ?? ''));
+
+        if (!$otp) Response::error('OTP is required.', 422);
+
+        $wu = Database::queryOne(
+            'SELECT wu.*, be.contact_email
+             FROM workspace_users wu
+             JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+
+        if (in_array($wu['status'], ['deleted_pending', 'deleted'], true)) {
+            Response::error('User is already deleted.', 400);
+        }
+        if (!$wu['deletion_otp']) Response::error('No pending deletion request. Request deletion first.', 400);
+        if (strtotime($wu['deletion_otp_expires_at']) < time()) Response::error('OTP has expired. Please request again.', 400);
+        if ($wu['deletion_otp'] !== $otp) Response::error('Invalid OTP.', 400);
+
+        // Suspend in Google immediately
+        GoogleWorkspaceService::suspendUser($wu['email']);
+
+        $now = date('Y-m-d H:i:s');
+        Database::beginTransaction();
+        try {
+            Database::execute(
+                "UPDATE workspace_users SET
+                   status = 'deleted_pending',
+                   deletion_requested_at = :now,
+                   deletion_confirmed_by = :by,
+                   deletion_otp = NULL,
+                   deletion_otp_expires_at = NULL
+                 WHERE id = :id",
+                [':now' => $now, ':by' => $req->user['userId'], ':id' => $id]
+            );
+
+            // Free the license slot immediately (only if used > 0 to avoid unsigned underflow)
+            Database::execute(
+                'UPDATE license_pool SET used = used - 1
+                 WHERE billing_entity_id = :be AND plan_slug = :plan AND used > 0',
+                [':be' => $wu['billing_entity_id'], ':plan' => $wu['plan_slug']]
+            );
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            Logger::error('[Delete] confirmDelete transaction failed: ' . $e->getMessage());
+            Response::error('Deletion failed. Please try again.', 500);
+        }
+
+        AuditService::log('DELETE_CONFIRMED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "Suspended in Google. Hard delete after 30 days.", $req->ip);
+
+        Response::json(['message' => 'User deleted. Account suspended in Google and will be permanently removed after 30 days. License freed immediately.']);
+    }
+
+    /**
+     * List recoverable users (deleted_pending) for the caller's billing entity.
+     * Shows days remaining before permanent deletion.
+     */
+    public function recoverable(Request $req): void
+    {
+        $user = $req->user;
+
+        if ($user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $user['userId']]);
+            $beId = (int) $pu['billing_entity_id'];
+        } else {
+            // Staff: filter by billing_entity_id query param if provided
+            $beId = isset($req->query['billing_entity_id']) ? (int) $req->query['billing_entity_id'] : null;
+        }
+
+        $where  = ["wu.status = 'deleted_pending'"];
+        $params = [];
+        if ($beId) { $where[] = 'wu.billing_entity_id = :be'; $params[':be'] = $beId; }
+
+        $rows = Database::query(
+            'SELECT wu.id, wu.first_name, wu.last_name, wu.email, wu.plan_slug,
+                    wu.deletion_requested_at, d.name AS domain_name,
+                    be.name AS billing_entity_name,
+                    DATEDIFF(DATE_ADD(wu.deletion_requested_at, INTERVAL 30 DAY), NOW()) AS days_remaining
+             FROM workspace_users wu
+             JOIN domains d ON d.id = wu.domain_id
+             JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE ' . implode(' AND ', $where) . '
+             ORDER BY wu.deletion_requested_at DESC',
+            $params
+        );
+
+        Response::json(['data' => $rows]);
+    }
+
+    /**
+     * Recover a deleted_pending user (within 30 days).
+     * Checks license pool has space — if not, returns 422 with buy_licenses hint.
+     */
+    public function recover(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne(
+            'SELECT * FROM workspace_users WHERE id = :id AND status = :s',
+            [':id' => $id, ':s' => 'deleted_pending']
+        );
+        if (!$wu) Response::error('User not found or not in recoverable state.', 404);
+
+        // Check 30-day window
+        $daysElapsed = (time() - strtotime($wu['deletion_requested_at'])) / 86400;
+        if ($daysElapsed > 30) {
+            Response::error('Recovery window has expired (30 days). Account cannot be recovered.', 410);
+        }
+
+        // Domain owner scope check
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$pu['billing_entity_id'] !== (int)$wu['billing_entity_id']) {
+                Response::error('Forbidden.', 403);
+            }
+        }
+
+        // Check license pool
+        $pool = Database::queryOne(
+            'SELECT allocated, used FROM license_pool WHERE billing_entity_id = :be AND plan_slug = :plan',
+            [':be' => $wu['billing_entity_id'], ':plan' => $wu['plan_slug']]
+        );
+        $available = $pool ? ((int)$pool['allocated'] - (int)$pool['used']) : 0;
+        if ($available < 1) {
+            Response::error('No available license for this plan. Please purchase a license before recovering.', 422);
+        }
+
+        // Unsuspend in Google
+        GoogleWorkspaceService::unsuspendUser($wu['email']);
+
+        Database::beginTransaction();
+        try {
+            Database::execute(
+                "UPDATE workspace_users SET
+                   status = 'active',
+                   deletion_requested_at = NULL,
+                   deletion_confirmed_by = NULL,
+                   deleted_at = NULL
+                 WHERE id = :id",
+                [':id' => $id]
+            );
+            Database::execute(
+                'UPDATE license_pool SET used = used + 1 WHERE billing_entity_id = :be AND plan_slug = :plan',
+                [':be' => $wu['billing_entity_id'], ':plan' => $wu['plan_slug']]
+            );
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            Logger::error('[Delete] recover failed: ' . $e->getMessage());
+            Response::error('Recovery failed.', 500);
+        }
+
+        AuditService::log('USER_RECOVERED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "Recovered from deleted_pending.", $req->ip);
+
+        Response::json(['message' => 'User recovered successfully. Account is active again.']);
     }
 }

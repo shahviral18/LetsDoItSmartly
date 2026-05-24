@@ -327,4 +327,31 @@ class GoogleWorkspaceService
             return [];
         }
     }
+
+    /**
+     * Permanently delete a user from Google Admin.
+     * ONLY called by the 30-day hard-delete cron — never by user-facing actions.
+     * Guarded by isManaged() — will never touch WMD or non-LDIS users.
+     */
+    public static function deleteUser(string $email): bool
+    {
+        if (!self::isManaged($email)) {
+            Logger::error("[GWS] deleteUser BLOCKED — $email is not a managed LDIS domain");
+            return false;
+        }
+        try {
+            $service = self::getService();
+            $service->users->delete($email);
+            Logger::info("[GWS] deleteUser OK → $email (permanent)");
+            return true;
+        } catch (Throwable $e) {
+            // 404 = already deleted in Google — still mark as deleted in DB
+            if (str_contains($e->getMessage(), '404') || str_contains($e->getMessage(), 'Resource Not Found')) {
+                Logger::info("[GWS] deleteUser → $email already gone from Google (404), marking deleted in DB");
+                return true;
+            }
+            Logger::error("[GWS] deleteUser FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
 }

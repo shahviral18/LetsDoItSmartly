@@ -80,7 +80,7 @@ class BillingEntityController
         $sets = []; $params = [':id' => $id];
 
         $fields = ['name','gst_number','contact_email','contact_phone','address','renewal_date','distributor_id',
-                   'welcome_email_sender_name','welcome_email_body'];
+                   'welcome_email_sender_name','welcome_email_body','deletion_approver_emails'];
         foreach ($fields as $f) {
             if (array_key_exists($f, $b)) {
                 $sets[] = "$f = :$f";

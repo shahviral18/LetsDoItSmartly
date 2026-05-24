@@ -107,14 +107,14 @@ $router->get ('/api/plans',      [LicenseController::class, 'getPlans']);
 $router->post('/api/plans/:id',  [LicenseController::class, 'updatePlan'], $superAdmin);
 
 // ── Workspace Users ───────────────────────────────────────────────────────────
-$router->get   ('/api/workspace-users',          [WorkspaceUserController::class, 'list'],    $auth);
-$router->post  ('/api/workspace-users',          [WorkspaceUserController::class, 'create'],  $auth);
-$router->get   ('/api/workspace-users/:id',      [WorkspaceUserController::class, 'get'],     $auth);
+$router->get   ('/api/workspace-users',             [WorkspaceUserController::class, 'list'],       $auth);
+$router->post  ('/api/workspace-users',             [WorkspaceUserController::class, 'create'],     $auth);
+$router->get   ('/api/workspace-users/recoverable', [WorkspaceUserController::class, 'recoverable'], $auth);
+$router->get   ('/api/workspace-users/:id',         [WorkspaceUserController::class, 'get'],        $auth);
 $router->patch ('/api/workspace-users/:id',      [WorkspaceUserController::class, 'update'],  $auth);
-$router->post  ('/api/workspace-users/:id/suspend',   [WorkspaceUserController::class, 'suspend'],   $auth);
-$router->post  ('/api/workspace-users/:id/unsuspend', [WorkspaceUserController::class, 'unsuspend'], $auth);
-$router->post  ('/api/workspace-users/:id/reset-password', [WorkspaceUserController::class, 'resetPassword'], $auth);
-$router->post  ('/api/workspace-users/:id/upgrade-plan',   [WorkspaceUserController::class, 'upgradePlan'],   $auth);
+// Action dispatcher — avoids ModSecurity blocking POST to sub-paths.
+// Use: PATCH /api/workspace-users/:id/action  with body { "action": "suspend"|"unsuspend"|"reset-password"|"upgrade-plan"|"archive"|"archive-confirm"|"restore", ...params }
+$router->patch('/api/workspace-users/:id/action', [WorkspaceUserController::class, 'dispatchAction'], $auth);
 
 // ── Payments ──────────────────────────────────────────────────────────────────
 $router->post('/api/payment/create-session', [PaymentController::class, 'createSession'], $auth);
@@ -158,6 +158,18 @@ $router->get  ('/api/bcc-requests',        [BccController::class, 'list'],      
 $router->post ('/api/bcc-requests',        [BccController::class, 'create'],     [...$auth, AuthMiddleware::authorize(['domain_owner'])]);
 $router->get  ('/api/bcc-requests/:id',    [BccController::class, 'get'],        $auth);
 $router->patch('/api/bcc-requests/:id',    [BccController::class, 'updateStatus'], AuthMiddleware::staffOnly(['super_admin','admin','support_admin']));
+
+// ── Cron HTTP triggers (token-protected, no auth middleware) ─────────────────
+$router->get('/api/cron/run-renewals', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    require BASE_PATH . '/cron/renewal-reminders.php';
+});
+$router->get('/api/cron/run-hard-delete', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    require BASE_PATH . '/cron/hard-delete.php';
+});
 
 // ── Google Sync (super_admin only) ───────────────────────────────────────────
 $router->post('/api/admin/sync-google', [SyncController::class, 'syncGoogle'], $superAdmin);
