@@ -1,9 +1,21 @@
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Users, Globe, CreditCard, AlertTriangle, TrendingUp, Shield, Activity, Building2 } from "lucide-react";
+import { Users, Globe, CreditCard, AlertTriangle, TrendingUp, Building2, Loader2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { mockBillingEntities, mockUsers, mockSecurityAlerts, mockInvoices } from "../../mock/data";
+import { api } from "../../lib/api";
 
 const fade = { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 } };
+
+interface Stats {
+  totalUsers: number;
+  activeUsers: number;
+  totalDomains: number;
+  totalBillingEntities: number;
+  pendingInvoices: number;
+  totalRevenue: number;
+  unresolved2svUsers: number;
+  licensePools: { name: string; slug: string; plans: { slug: string; allocated: number; used: number }[] }[];
+}
 
 function StatCard({ icon: Icon, label, value, sub, color, delay = 0 }: { icon: any; label: string; value: string | number; sub?: string; color: string; delay?: number }) {
   return (
@@ -21,132 +33,83 @@ function StatCard({ icon: Icon, label, value, sub, color, delay = 0 }: { icon: a
   );
 }
 
-function AlertRow({ alert }: { alert: any }) {
-  const colors: Record<string, string> = { high: "text-danger bg-danger/10 border-danger/20", medium: "text-warning bg-warning/10 border-warning/20", low: "text-success bg-success/10 border-success/20" };
-  return (
-    <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-surface-2 transition-colors">
-      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${colors[alert.severity]}`}>{alert.severity}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate">{alert.message}</p>
-        <p className="text-xs text-muted-foreground">{alert.userName} · {alert.domain}</p>
-      </div>
-      {!alert.resolved && <span className="w-2 h-2 rounded-full bg-danger animate-pulse-slow shrink-0" />}
-    </div>
-  );
-}
-
 export default function DashboardPage() {
   const { user } = useAuth();
-  const totalUsers = mockUsers.length;
-  const totalDomains = mockBillingEntities.flatMap(b => b.domains).length;
-  const activeAlerts = mockSecurityAlerts.filter(a => !a.resolved).length;
-  const pendingInvoices = mockInvoices.filter(i => i.status === "pending").length;
-  const totalRevenue = mockInvoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get<Stats>('/dashboard/stats')
+      .then(setStats)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const planColors: Record<string, string> = {
+    basic: 'bg-slate-400', pro: 'bg-primary', enterprise: 'bg-indigo-500', premium: 'bg-cyan-500',
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+    </div>
+  );
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      {/* Welcome */}
       <div>
-        <h1 className="text-xl font-bold text-foreground">Good morning, {user?.name?.split(" ")[0]} 👋</h1>
+        <h1 className="text-xl font-bold text-foreground">Good {getGreeting()}, {user?.name?.split(" ")[0]}</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Here's what's happening across your email solution today.</p>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users} label="Total Users" value={totalUsers} sub="Across all domains" color="bg-primary/10 text-primary" delay={0} />
-        <StatCard icon={Globe} label="Active Domains" value={totalDomains} sub="Managed OUs" color="bg-success/10 text-success" delay={0.05} />
-        <StatCard icon={AlertTriangle} label="Security Alerts" value={activeAlerts} sub="Unresolved" color="bg-danger/10 text-danger" delay={0.1} />
-        <StatCard icon={CreditCard} label="Pending Invoices" value={pendingInvoices} sub={`₹${totalRevenue.toLocaleString("en-IN")} collected`} color="bg-warning/10 text-warning" delay={0.15} />
+        <StatCard icon={Users} label="Total Users" value={stats?.totalUsers ?? 0} sub={`${stats?.activeUsers ?? 0} active`} color="bg-primary/10 text-primary" delay={0} />
+        <StatCard icon={Globe} label="Active Domains" value={stats?.totalDomains ?? 0} sub={`${stats?.totalBillingEntities ?? 0} billing entities`} color="bg-success/10 text-success" delay={0.05} />
+        <StatCard icon={AlertTriangle} label="2SV Disabled" value={stats?.unresolved2svUsers ?? 0} sub="Users at risk" color="bg-danger/10 text-danger" delay={0.1} />
+        <StatCard icon={CreditCard} label="Pending Invoices" value={stats?.pendingInvoices ?? 0} sub={`₹${(stats?.totalRevenue ?? 0).toLocaleString('en-IN')} collected`} color="bg-warning/10 text-warning" delay={0.15} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* License pools */}
-        <div className="lg:col-span-2 bg-card rounded-xl border border-border shadow-card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-foreground">License Pools</h2>
-            <Building2 className="w-4 h-4 text-muted-foreground" />
-          </div>
-          <div className="space-y-4">
-            {mockBillingEntities.map(be => (
-              <div key={be.id}>
+      {/* License pools */}
+      <div className="bg-card rounded-xl border border-border shadow-card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-foreground">License Pools</h2>
+          <Building2 className="w-4 h-4 text-muted-foreground" />
+        </div>
+        {!stats?.licensePools?.length ? (
+          <p className="text-sm text-muted-foreground">No license pool data.</p>
+        ) : (
+          <div className="space-y-5">
+            {stats.licensePools.map(be => (
+              <div key={be.slug}>
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm font-semibold text-foreground">{be.name}</p>
-                  <p className="text-xs text-muted-foreground">{be.domains.length} domain{be.domains.length > 1 ? "s" : ""}</p>
                 </div>
-                {(["basic","pro","enterprise","premium"] as const).map(plan => {
-                  const pool = be.licensePool[plan];
-                  if (!pool.allocated) return null;
-                  const pct = Math.round((pool.used / pool.allocated) * 100);
-                  const colors: Record<string, string> = { basic: "bg-slate-400", pro: "bg-primary", enterprise: "bg-primary-dim", premium: "bg-accent" };
+                {be.plans.filter(p => p.allocated > 0).map(p => {
+                  const pct = Math.round((p.used / p.allocated) * 100);
                   return (
-                    <div key={plan} className="flex items-center gap-3 mb-1.5">
-                      <span className="text-[10px] font-semibold uppercase text-muted-foreground w-20 capitalize">{plan}</span>
-                      <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${colors[plan]} transition-all`} style={{ width: `${pct}%` }} />
+                    <div key={p.slug} className="mb-2">
+                      <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                        <span className="capitalize">{p.slug}</span>
+                        <span>{p.used}/{p.allocated} ({pct}%)</span>
                       </div>
-                      <span className="text-xs text-muted-foreground w-16 text-right">{pool.used}/{pool.allocated}</span>
+                      <div className="h-1.5 rounded-full bg-border overflow-hidden">
+                        <div className={`h-full rounded-full ${planColors[p.slug] ?? 'bg-slate-400'}`} style={{ width: `${pct}%` }} />
+                      </div>
                     </div>
                   );
                 })}
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Security alerts */}
-        <div className="bg-card rounded-xl border border-border shadow-card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-foreground">Recent Alerts</h2>
-            <Shield className="w-4 h-4 text-muted-foreground" />
-          </div>
-          <div className="space-y-1">
-            {mockSecurityAlerts.map(a => <AlertRow key={a.id} alert={a} />)}
-          </div>
-          <button className="mt-3 w-full text-xs text-primary hover:text-primary-glow font-semibold transition-colors">View all alerts →</button>
-        </div>
+        )}
       </div>
-
-      {/* Recent users */}
-      <div className="bg-card rounded-xl border border-border shadow-card p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-bold text-foreground">Recent Users</h2>
-          <Activity className="w-4 h-4 text-muted-foreground" />
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                {["Name","Email","Domain","Plan","Status","Last Login"].map(h => (
-                  <th key={h} className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {mockUsers.slice(0, 5).map(u => {
-                const daysSince = u.lastLogin ? Math.floor((Date.now() - new Date(u.lastLogin).getTime()) / 86400000) : null;
-                const stale = daysSince !== null && daysSince > 30;
-                const planColors: Record<string, string> = { basic: "bg-slate-100 text-slate-600", pro: "bg-primary/10 text-primary", enterprise: "bg-primary-dim/10 text-primary-dim", premium: "bg-accent/10 text-accent" };
-                const statusColors: Record<string, string> = { active: "bg-success/10 text-success", suspended: "bg-danger/10 text-danger", pending: "bg-warning/10 text-warning" };
-                return (
-                  <tr key={u.id} className="hover:bg-surface-2 transition-colors">
-                    <td className="py-2.5 px-3 font-medium text-foreground">{u.firstName} {u.lastName}</td>
-                    <td className="py-2.5 px-3 text-muted-foreground">{u.email}</td>
-                    <td className="py-2.5 px-3 text-muted-foreground">{u.domain}</td>
-                    <td className="py-2.5 px-3"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${planColors[u.plan]}`}>{u.plan}</span></td>
-                    <td className="py-2.5 px-3"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${statusColors[u.status]}`}>{u.status}</span></td>
-                    <td className={`py-2.5 px-3 text-xs ${stale ? "text-danger font-semibold" : "text-muted-foreground"}`}>
-                      {daysSince === null ? "Never" : daysSince === 0 ? "Today" : `${daysSince}d ago`}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <p className="text-center text-[11px] text-muted-foreground pb-2">Powered by <span className="font-semibold">TechnoDoc Solutions</span></p>
     </div>
   );
+}
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
 }

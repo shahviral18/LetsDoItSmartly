@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { mockAuditLog } from '../../mock/data';
-import type { Role, AuditAction } from '../../types';
+import { useState, useEffect } from 'react';
+import { api } from '../../lib/api';
+import type { Role } from '../../types';
 import ExportBar from '../../components/shared/ExportBar';
 import { exportCSV, exportPDF, fmtDate } from '../../lib/export';
 
@@ -15,60 +15,53 @@ const roleColors: Record<Role, string> = {
   domain_owner: 'bg-emerald-100 text-emerald-700',
 };
 
-const actionColors: Partial<Record<AuditAction, string>> = {
-  user_suspended: 'text-red-600',
-  coupon_deleted: 'text-red-500',
-  alert_resolved: 'text-emerald-600',
-  user_created: 'text-blue-600',
-  user_reactivated: 'text-emerald-600',
-  pricing_updated: 'text-amber-600',
-  referral_toggled: 'text-purple-600',
-};
-
-const actionLabel: Record<AuditAction, string> = {
-  user_created: 'User Created',
-  user_suspended: 'User Suspended',
-  user_reactivated: 'User Reactivated',
-  plan_changed: 'Plan Changed',
-  license_assigned: 'License Assigned',
-  license_revoked: 'License Revoked',
-  coupon_created: 'Coupon Created',
-  coupon_deleted: 'Coupon Deleted',
-  pricing_updated: 'Pricing Updated',
-  referral_toggled: 'Referral Toggled',
-  alert_resolved: 'Alert Resolved',
-  invoice_generated: 'Invoice Generated',
-  domain_added: 'Domain Added',
-  export_downloaded: 'Export Downloaded',
-};
 
 const roles: Role[] = ['super_admin', 'admin', 'account_manager', 'support_admin', 'backoffice', 'auditor', 'distributor', 'domain_owner'];
 
+interface AuditEntry {
+  id: number;
+  actor_name: string;
+  actor_role: string;
+  action: string;
+  target: string;
+  detail: string;
+  created_at: string;
+}
+
 export default function AuditLogPage() {
+  const [log, setLog] = useState<AuditEntry[]>([]);
+  const [loading, setLoading] = useState(true);
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
 
-  const filtered = mockAuditLog.filter(entry => {
-    if (roleFilter !== 'all' && entry.actorRole !== roleFilter) return false;
-    if (dateFrom && entry.timestamp < dateFrom) return false;
-    if (dateTo && entry.timestamp > dateTo + 'T23:59:59Z') return false;
+  useEffect(() => {
+    api.get<{ data: AuditEntry[] }>('/audit-log')
+      .then(r => setLog(r.data ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = log.filter(entry => {
+    if (roleFilter !== 'all' && entry.actor_role !== roleFilter) return false;
+    if (dateFrom && entry.created_at < dateFrom) return false;
+    if (dateTo && entry.created_at > dateTo + 'T23:59:59Z') return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!entry.actorName.toLowerCase().includes(q) && !entry.target.toLowerCase().includes(q) && !entry.detail.toLowerCase().includes(q)) return false;
+      if (!entry.actor_name.toLowerCase().includes(q) && !entry.target.toLowerCase().includes(q) && !entry.detail.toLowerCase().includes(q)) return false;
     }
     return true;
   });
 
   const headers = ['Actor', 'Role', 'Action', 'Target', 'Detail', 'Timestamp'];
-  const rows = filtered.map(e => [e.actorName, e.actorRole, actionLabel[e.action], e.target, e.detail, fmtDate(e.timestamp)]);
+  const rows = filtered.map(e => [e.actor_name, e.actor_role, e.action, e.target, e.detail, fmtDate(e.created_at)]);
 
   return (
     <div>
       <ExportBar
         title="Portal Audit Log"
-        subtitle={`${filtered.length} of ${mockAuditLog.length} entries`}
+        subtitle={loading ? 'Loading…' : `${filtered.length} of ${log.length} entries`}
         onExportCSV={() => exportCSV('audit-log', headers, rows.map(r => [r]))}
         onExportPDF={() => exportPDF('audit-log', 'Portal Audit Log', headers, rows)}
       />
@@ -131,18 +124,18 @@ export default function AuditLogPage() {
             )}
             {filtered.map(entry => (
               <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
-                <td className="px-5 py-3.5 font-medium text-slate-800">{entry.actorName}</td>
+                <td className="px-5 py-3.5 font-medium text-slate-800">{entry.actor_name || '—'}</td>
                 <td className="px-5 py-3.5">
-                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${roleColors[entry.actorRole]}`}>
-                    {entry.actorRole.replace('_', ' ')}
+                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${roleColors[entry.actor_role as Role] ?? 'bg-slate-100 text-slate-600'}`}>
+                    {entry.actor_role?.replace(/_/g, ' ')}
                   </span>
                 </td>
-                <td className={`px-5 py-3.5 font-medium ${actionColors[entry.action] ?? 'text-slate-700'}`}>
-                  {actionLabel[entry.action]}
+                <td className="px-5 py-3.5 font-medium text-slate-700">
+                  {entry.action?.replace(/_/g, ' ')}
                 </td>
                 <td className="px-5 py-3.5 text-slate-600 font-mono text-xs">{entry.target}</td>
                 <td className="px-5 py-3.5 text-slate-500 hidden lg:table-cell max-w-xs truncate">{entry.detail}</td>
-                <td className="px-5 py-3.5 text-slate-400 text-xs hidden md:table-cell whitespace-nowrap">{fmtDate(entry.timestamp)}</td>
+                <td className="px-5 py-3.5 text-slate-400 text-xs hidden md:table-cell whitespace-nowrap">{fmtDate(entry.created_at)}</td>
               </tr>
             ))}
           </tbody>

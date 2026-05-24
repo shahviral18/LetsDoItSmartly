@@ -70,6 +70,58 @@ $router->get('/api/health', function (Request $req) {
     Response::json(['status' => 'ok', 'app' => 'LetsDoItSmartly', 'env' => APP_ENV, 'time' => date('c')]);
 });
 
+// ── Dashboard stats ───────────────────────────────────────────────────────────
+$router->get('/api/dashboard/stats', function (Request $req) {
+    $totalUsers   = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE status != "deleted"', [])['n'];
+    $activeUsers  = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE status = "active"', [])['n'];
+    $totalDomains = (int) Database::queryOne('SELECT COUNT(*) AS n FROM domains WHERE is_active = 1', [])['n'];
+    $totalBe      = (int) Database::queryOne('SELECT COUNT(*) AS n FROM billing_entities', [])['n'];
+    $pendingInv   = (int) Database::queryOne('SELECT COUNT(*) AS n FROM invoices WHERE status = "pending"', [])['n'];
+    $totalRev     = (float) (Database::queryOne('SELECT COALESCE(SUM(amount),0) AS s FROM invoices WHERE status = "paid"', [])['s'] ?? 0);
+    $no2sv        = (int) Database::queryOne('SELECT COUNT(*) AS n FROM workspace_users WHERE two_sv_enabled = 0 AND status = "active"', [])['n'];
+
+    // License pools per billing entity
+    $pools = Database::query(
+        'SELECT be.name, be.slug, lp.plan_slug, lp.allocated, lp.used
+         FROM license_pool lp JOIN billing_entities be ON be.id = lp.billing_entity_id
+         ORDER BY be.name, lp.plan_slug',
+        []
+    );
+    $poolMap = [];
+    foreach ($pools as $p) {
+        $k = $p['slug'];
+        if (!isset($poolMap[$k])) $poolMap[$k] = ['name' => $p['name'], 'slug' => $k, 'plans' => []];
+        $poolMap[$k]['plans'][] = ['slug' => $p['plan_slug'], 'allocated' => (int)$p['allocated'], 'used' => (int)$p['used']];
+    }
+
+    Response::json([
+        'totalUsers' => $totalUsers, 'activeUsers' => $activeUsers,
+        'totalDomains' => $totalDomains, 'totalBillingEntities' => $totalBe,
+        'pendingInvoices' => $pendingInv, 'totalRevenue' => $totalRev,
+        'unresolved2svUsers' => $no2sv,
+        'licensePools' => array_values($poolMap),
+    ]);
+}, $auth);
+
+// ── Domain stats (with user/storage aggregates) ───────────────────────────────
+$router->get('/api/domains/stats', function (Request $req) {
+    $rows = Database::query(
+        'SELECT d.id, d.name, d.ou_path, d.is_active, be.name AS billing_entity_name, be.id AS billing_entity_id,
+                COUNT(wu.id) AS user_count,
+                SUM(wu.two_sv_enabled) AS two_sv_count,
+                COALESCE(SUM(wu.storage_used_mb),0) AS storage_used_mb,
+                COALESCE(SUM(wu.storage_total_mb),0) AS storage_total_mb
+         FROM domains d
+         JOIN billing_entities be ON be.id = d.billing_entity_id
+         LEFT JOIN workspace_users wu ON wu.domain_id = d.id AND wu.status != "deleted"
+         WHERE d.is_active = 1
+         GROUP BY d.id
+         ORDER BY d.name',
+        []
+    );
+    Response::json(['data' => $rows]);
+}, $staffAuth);
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 $router->post('/api/auth/login',           [AuthController::class, 'login'],          [RateLimiter::limit('LOGIN_ATTEMPT', 10, 900)]);
 $router->get ('/api/auth/me',              [AuthController::class, 'me'],             $auth);
