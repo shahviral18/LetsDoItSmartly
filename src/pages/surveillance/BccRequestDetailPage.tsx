@@ -6,8 +6,8 @@ import {
   XCircle, PlayCircle, ExternalLink, Shield, FolderOpen,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { mockBccRequests } from "../../mock/data";
-import type { BccRequest, BccStatus } from "../../types";
+import { useBccRequests, updateBccStatus } from "../../store/bccStore";
+import type { BccStatus } from "../../types";
 import { cn } from "../../lib/utils";
 
 const statusConfig: Record<BccStatus, { label: string; color: string; icon: React.ReactNode }> = {
@@ -59,7 +59,7 @@ export default function BccRequestDetailPage() {
   const { user } = useAuth();
   const isStaff = user?.role !== "domain_owner";
 
-  const [requests, setRequests] = useState<BccRequest[]>(mockBccRequests);
+  const requests = useBccRequests();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -77,15 +77,10 @@ export default function BccRequestDetailPage() {
   }
 
   const updateStatus = async (newStatus: BccStatus, note?: string) => {
+    if (!req) return;
     setActionLoading(newStatus);
     await new Promise(r => setTimeout(r, 800));
-    setRequests(prev => prev.map(r => r.id === req.id ? {
-      ...r,
-      status: newStatus,
-      completedBy: newStatus === "completed" ? (user?.name ?? "Staff") : r.completedBy,
-      completedAt: newStatus === "completed" ? new Date().toISOString() : r.completedAt,
-      notes: note ?? r.notes,
-    } : r));
+    updateBccStatus(req.id, newStatus, user?.name ?? "Staff", note);
     setActionLoading(null);
     setShowRejectInput(false);
     if (newStatus === "completed") navigate("/surveillance");

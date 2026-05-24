@@ -2,7 +2,8 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Eye, Plus, CheckCircle2, Clock, Loader2, AlertCircle, XCircle, ChevronRight, Mail, Users, Globe } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { mockBccRequests, mockBillingEntities, mockUsers } from "../../mock/data";
+import { mockBillingEntities, mockUsers } from "../../mock/data";
+import { useBccRequests, addBccRequest } from "../../store/bccStore";
 import type { BccDirection, BccRequest, BccStatus } from "../../types";
 import { cn } from "../../lib/utils";
 import { useNavigate } from "react-router-dom";
@@ -37,7 +38,7 @@ export default function EmailSurveillancePage() {
   const isDomainOwner = user?.role === "domain_owner";
   const isStaff = ["super_admin","admin","support_admin","account_manager"].includes(user?.role ?? "");
 
-  const [requests, setRequests] = useState<BccRequest[]>(mockBccRequests);
+  const requests = useBccRequests();
   const [showForm, setShowForm] = useState(false);
 
   // Form state
@@ -78,7 +79,7 @@ export default function EmailSurveillancePage() {
       requestedBy: user?.id ?? "",
       requestedAt: new Date().toISOString(),
     };
-    setRequests(prev => [newReq, ...prev]);
+    addBccRequest(newReq);
     setSubmitting(false);
     setSubmitted(true);
     setShowForm(false);
