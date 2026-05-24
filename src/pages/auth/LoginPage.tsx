@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Shield, Eye, EyeOff, Lock, Mail, Loader2, ChevronDown } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { mockAuthUsers } from "../../mock/data";
+import { api } from "../../lib/api";
 import type { Role } from "../../types";
 import { cn } from "../../lib/utils";
 
@@ -33,11 +34,17 @@ export default function LoginPage() {
     setError("");
     if (!email || !password) { setError("Please fill in all fields."); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    const user = Object.values(mockAuthUsers).find(u => u.email === email);
-    if (!user) { setError("Invalid email or password."); setLoading(false); return; }
-    login(user);
-    navigate("/dashboard");
+    try {
+      const res = await api.post<{ token: string; user: { id: number; name: string; email: string; role: Role; userType: string; passwordResetRequired: boolean } }>(
+        '/auth/login', { email, password }
+      );
+      login({ id: String(res.user.id), name: res.user.name, email: res.user.email, role: res.user.role }, res.token);
+      navigate('/dashboard');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Invalid email or password.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const quickLogin = (role: Role) => {
