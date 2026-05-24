@@ -1,13 +1,20 @@
-# Allow PHP execution in this directory (override parent deny)
+# Allow PHP execution in this directory
 <FilesMatch "\.php$">
     Require all granted
 </FilesMatch>
 
-RewriteEngine On
+# CORS headers for all responses (including OPTIONS preflight)
+Header always set Access-Control-Allow-Origin "https://mails.letsdoitsmartly.com"
+Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+Header always set Access-Control-Allow-Credentials "true"
 
-# If request is for an existing file or directory, serve it directly
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
+# Handle OPTIONS preflight at Apache level (return 204 immediately with CORS headers)
+RewriteEngine On
+RewriteCond %{REQUEST_METHOD} OPTIONS
+RewriteRule ^ - [R=204,L]
 
 # Route all other requests to index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.*)$ index.php [QSA,L]
