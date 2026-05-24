@@ -23,10 +23,12 @@ const severityConfig = {
 };
 
 const typeLabel: Record<string, string> = {
-  '2sv_disabled':       '2SV Disabled',
-  suspicious_login:     'Suspicious Login',
-  account_compromised:  'Account Compromised',
-  new_device:           'New Device',
+  '2sv_disabled':      '2SV Disabled',
+  suspicious_login:    'Suspicious Login',
+  account_compromised: 'Account Compromised',
+  new_device:          'New Device',
+  stale_account:       'Stale Account',
+  account_suspended:   'Suspended',
 };
 
 export default function SecurityAlertsPage() {
@@ -119,6 +121,7 @@ export default function SecurityAlertsPage() {
                   <tr key={alert.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3.5">
                       <p className="font-medium text-slate-800">{alert.user_name}</p>
+                      <p className="text-xs text-[#1A7DC4] mt-0.5">{alert.email}</p>
                       <p className="text-xs text-slate-400 mt-0.5">{alert.message}</p>
                     </td>
                     <td className="px-5 py-3.5 text-slate-600">{alert.domain}</td>

@@ -284,31 +284,70 @@ $router->get('/api/security/alerts', function (Request $req) {
     $beFilter = $beId ? 'AND wu.billing_entity_id = :be' : '';
     $params   = $beId ? [':be' => $beId] : [];
 
-    // 2SV disabled = High severity
     $rows = Database::query(
         "SELECT wu.id, CONCAT(wu.first_name,' ',wu.last_name) AS user_name,
-                wu.email, d.name AS domain_name, wu.status, wu.created_at
+                wu.email, d.name AS domain_name, wu.status,
+                wu.two_sv_enabled, wu.last_login_at, wu.created_at
          FROM workspace_users wu
          JOIN domains d ON d.id = wu.domain_id
-         WHERE wu.two_sv_enabled = 0 AND wu.status = 'active' $beFilter
-         ORDER BY wu.email LIMIT 200",
+         WHERE wu.status != 'deleted' $beFilter
+         ORDER BY wu.email LIMIT 500",
         $params
     );
 
     $alerts = [];
     foreach ($rows as $r) {
-        $alerts[] = [
-            'id'        => 'sv_' . $r['id'],
-            'user_name' => $r['user_name'],
-            'email'     => $r['email'],
-            'domain'    => $r['domain_name'],
-            'type'      => '2sv_disabled',
-            'severity'  => 'high',
-            'message'   => '2-Step Verification is disabled',
-            'resolved'  => false,
-            'timestamp' => $r['created_at'],
-        ];
+        // 2SV disabled on active accounts → Medium
+        if ($r['status'] === 'active' && !(int)$r['two_sv_enabled']) {
+            $alerts[] = [
+                'id'        => '2sv_' . $r['id'],
+                'user_name' => $r['user_name'],
+                'email'     => $r['email'],
+                'domain'    => $r['domain_name'],
+                'type'      => '2sv_disabled',
+                'severity'  => 'medium',
+                'message'   => '2-Step Verification is disabled',
+                'resolved'  => false,
+                'timestamp' => $r['created_at'],
+            ];
+        }
+        // No login in 90+ days → Low
+        if ($r['last_login_at'] && $r['status'] === 'active') {
+            $daysSince = (int) floor((time() - strtotime($r['last_login_at'])) / 86400);
+            if ($daysSince >= 90) {
+                $alerts[] = [
+                    'id'        => 'stale_' . $r['id'],
+                    'user_name' => $r['user_name'],
+                    'email'     => $r['email'],
+                    'domain'    => $r['domain_name'],
+                    'type'      => 'stale_account',
+                    'severity'  => 'low',
+                    'message'   => "No login in {$daysSince} days",
+                    'resolved'  => false,
+                    'timestamp' => $r['last_login_at'],
+                ];
+            }
+        }
+        // Suspended accounts → High (may need attention)
+        if ($r['status'] === 'suspended') {
+            $alerts[] = [
+                'id'        => 'susp_' . $r['id'],
+                'user_name' => $r['user_name'],
+                'email'     => $r['email'],
+                'domain'    => $r['domain_name'],
+                'type'      => 'account_suspended',
+                'severity'  => 'high',
+                'message'   => 'Account is suspended',
+                'resolved'  => false,
+                'timestamp' => $r['created_at'],
+            ];
+        }
     }
+
+    // Sort: high → medium → low
+    $order = ['high' => 0, 'medium' => 1, 'low' => 2];
+    usort($alerts, fn($a, $b) => $order[$a['severity']] <=> $order[$b['severity']]);
+
     Response::json(['data' => $alerts]);
 }, $auth);
 
