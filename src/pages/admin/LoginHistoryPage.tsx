@@ -80,7 +80,7 @@ export default function LoginHistoryPage() {
       <ExportBar
         title="Login History"
         subtitle={loading ? 'Loading…' : `${filtered.length} login events`}
-        onExportCSV={() => exportCSV('login-history', headers, rows.map(r => [r]))}
+        onExportCSV={() => exportCSV('login-history', headers, rows)}
         onExportPDF={() => exportPDF('login-history', 'Login History', headers, rows)}
       >
         <div className="relative">

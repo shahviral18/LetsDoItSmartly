@@ -32,7 +32,7 @@ export default function BackofficePage() {
       <ExportBar
         title="Backoffice Overview"
         subtitle="Subscription, revenue &amp; license summary across all billing entities"
-        onExportCSV={() => exportCSV('backoffice', exportHeaders, exportRows.map(r => [r]))}
+        onExportCSV={() => exportCSV('backoffice', exportHeaders, exportRows)}
         onExportPDF={() => exportPDF('backoffice', 'Backoffice Overview', exportHeaders, exportRows)}
       />
 

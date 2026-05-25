@@ -433,4 +433,20 @@ INSERT IGNORE INTO plans (slug, name, price_per_year, ou_suffix, color_hex) VALU
   ('enterprise', 'Enterprise', 14400.00, 'e',   '#8b5cf6'),
   ('premium',    'Premium',    24000.00, 'pre', '#f59e0b');
 
+-- ------------------------------------------------------------
+-- shared_drives — cache table, populated by nightly cron
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shared_drives (
+  id             VARCHAR(64)  NOT NULL PRIMARY KEY,
+  name           VARCHAR(255) NOT NULL,
+  creator_email  VARCHAR(255) DEFAULT NULL,
+  domain         VARCHAR(255) DEFAULT NULL,
+  member_count   INT UNSIGNED NOT NULL DEFAULT 0,
+  members_json   MEDIUMTEXT   DEFAULT NULL,
+  created_at     DATETIME     DEFAULT NULL,
+  last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_sd_domain (domain),
+  INDEX idx_sd_synced (last_synced_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 SET FOREIGN_KEY_CHECKS = 1;

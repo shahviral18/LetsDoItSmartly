@@ -460,15 +460,20 @@ class GoogleWorkspaceService
             $result = [];
             $pageToken = null;
             do {
-                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime)'];
+                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime,creatorEmail)'];
                 if ($pageToken) $opts['pageToken'] = $pageToken;
                 $resp = $drive->drives->listDrives($opts);
                 foreach ($resp->getDrives() as $d) {
+                    $creatorEmail = $d->getCreatorEmail() ?? '';
+                    $domain = $creatorEmail && str_contains($creatorEmail, '@')
+                        ? strtolower(explode('@', $creatorEmail)[1])
+                        : '';
                     $result[] = [
-                        'id'           => $d->getId(),
-                        'name'         => $d->getName(),
-                        'createdAt'    => $d->getCreatedTime(),
-                        'membersCount' => 0,
+                        'id'            => $d->getId(),
+                        'name'          => $d->getName(),
+                        'creator_email' => $creatorEmail,
+                        'domain'        => $domain,
+                        'created_at'    => $d->getCreatedTime(),
                     ];
                 }
                 $pageToken = $resp->getNextPageToken();
@@ -513,6 +518,73 @@ class GoogleWorkspaceService
             Logger::error("[GWS] getSharedDriveMembers FAILED $driveId: " . $e->getMessage());
             throw $e;
         }
+    }
+
+    /**
+     * Full sync: fetch all shared drives + members from Google, upsert into shared_drives table.
+     * Called by nightly cron and manual refresh endpoint.
+     */
+    public static function syncSharedDrivesToDb(): array
+    {
+        $start   = microtime(true);
+        $synced  = 0;
+        $errors  = 0;
+
+        // Auto-create table if missing
+        Database::execute("CREATE TABLE IF NOT EXISTS shared_drives (
+            id             VARCHAR(64)  NOT NULL PRIMARY KEY,
+            name           VARCHAR(255) NOT NULL,
+            creator_email  VARCHAR(255) DEFAULT NULL,
+            domain         VARCHAR(255) DEFAULT NULL,
+            member_count   INT UNSIGNED NOT NULL DEFAULT 0,
+            members_json   MEDIUMTEXT   DEFAULT NULL,
+            created_at     DATETIME     DEFAULT NULL,
+            last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", []);
+
+        $drives = self::listSharedDrives();
+
+        foreach ($drives as $drive) {
+            try {
+                $members     = self::getSharedDriveMembers($drive['id']);
+                $membersJson = json_encode($members);
+                $memberCount = count($members);
+                $createdAt   = $drive['created_at']
+                    ? date('Y-m-d H:i:s', strtotime($drive['created_at']))
+                    : null;
+
+                Database::execute(
+                    "INSERT INTO shared_drives (id, name, creator_email, domain, member_count, members_json, created_at, last_synced_at)
+                     VALUES (:id, :name, :ce, :dom, :mc, :mj, :ca, NOW())
+                     ON DUPLICATE KEY UPDATE
+                       name           = VALUES(name),
+                       creator_email  = VALUES(creator_email),
+                       domain         = VALUES(domain),
+                       member_count   = VALUES(member_count),
+                       members_json   = VALUES(members_json),
+                       created_at     = VALUES(created_at),
+                       last_synced_at = NOW()",
+                    [
+                        ':id'  => $drive['id'],
+                        ':name' => $drive['name'],
+                        ':ce'  => $drive['creator_email'],
+                        ':dom' => $drive['domain'],
+                        ':mc'  => $memberCount,
+                        ':mj'  => $membersJson,
+                        ':ca'  => $createdAt,
+                    ]
+                );
+                $synced++;
+            } catch (Throwable $e) {
+                Logger::error("[GWS] syncSharedDrives failed for {$drive['id']}: " . $e->getMessage());
+                $errors++;
+            }
+        }
+
+        $duration = round(microtime(true) - $start, 1);
+        Logger::info("[GWS] syncSharedDrivesToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
+
+        return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
     }
 
     /**

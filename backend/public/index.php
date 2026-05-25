@@ -438,24 +438,50 @@ $router->patch('/api/security/alerts/:id/resolve', function (Request $req) {
 
 // ── Shared Drives ─────────────────────────────────────────────────────────────
 $router->get('/api/shared-drives', function (Request $req) {
-    try {
-        $drives = GoogleWorkspaceService::listSharedDrives();
-        Response::json(['data' => $drives]);
-    } catch (Throwable $e) {
-        Response::error('Failed to fetch shared drives: ' . $e->getMessage(), 500);
-    }
+    // Ensure table exists (first visit before any sync)
+    Database::execute("CREATE TABLE IF NOT EXISTS shared_drives (
+        id             VARCHAR(64)  NOT NULL PRIMARY KEY,
+        name           VARCHAR(255) NOT NULL,
+        creator_email  VARCHAR(255) DEFAULT NULL,
+        domain         VARCHAR(255) DEFAULT NULL,
+        member_count   INT UNSIGNED NOT NULL DEFAULT 0,
+        members_json   MEDIUMTEXT   DEFAULT NULL,
+        created_at     DATETIME     DEFAULT NULL,
+        last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", []);
+
+    $drives = Database::query('SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives ORDER BY name');
+    $lastSynced = Database::queryOne('SELECT MAX(last_synced_at) AS ts FROM shared_drives');
+    Response::json(['data' => $drives, 'last_synced_at' => $lastSynced['ts'] ?? null]);
 }, $auth);
 
 $router->get('/api/shared-drives/:driveId/members', function (Request $req) {
     $driveId = $req->params['driveId'] ?? '';
     if (!$driveId) Response::error('Drive ID required', 400);
-    try {
-        $members = GoogleWorkspaceService::getSharedDriveMembers($driveId);
-        Response::json(['data' => $members]);
-    } catch (Throwable $e) {
-        Response::error('Failed to fetch members: ' . $e->getMessage(), 500);
-    }
+    $row = Database::queryOne('SELECT members_json FROM shared_drives WHERE id = :id', [':id' => $driveId]);
+    if (!$row) Response::error('Drive not found', 404);
+    Response::json(['data' => json_decode($row['members_json'] ?? '[]', true)]);
 }, $auth);
+
+$router->post('/api/shared-drives/sync', function (Request $req) {
+    try {
+        $stats = GoogleWorkspaceService::syncSharedDrivesToDb();
+        Response::json($stats);
+    } catch (Throwable $e) {
+        Response::error('Sync failed: ' . $e->getMessage(), 500);
+    }
+}, $superAdmin);
+
+$router->get('/api/cron/sync-shared-drives', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    try {
+        $stats = GoogleWorkspaceService::syncSharedDrivesToDb();
+        Response::json($stats);
+    } catch (Throwable $e) {
+        Response::error('Sync failed: ' . $e->getMessage(), 500);
+    }
+});
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 $router->get('/api/profile', function (Request $req) {
