@@ -270,7 +270,10 @@ $router->get  ('/api/admin/config',       function (Request $req) {
 }, $superAdmin);
 
 $router->post('/api/admin/config', function (Request $req) {
+    $allowed = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from', 'smtp_from_name',
+                'license_price_per_user', 'trial_days', 'support_email', 'company_name'];
     foreach ($req->body as $key => $value) {
+        if (!in_array($key, $allowed, true)) continue;
         Database::execute(
             'INSERT INTO admin_config (`key`, value, updated_by) VALUES (:k, :v, :by)
              ON DUPLICATE KEY UPDATE value = :v, updated_by = :by',
@@ -481,7 +484,7 @@ $router->get('/api/shared-drives/:driveId/members', function (Request $req) {
     if (!$driveId) Response::error('Drive ID required', 400);
     $row = Database::queryOne('SELECT members_json FROM shared_drives WHERE id = :id', [':id' => $driveId]);
     if (!$row) Response::error('Drive not found', 404);
-    Response::json(['data' => json_decode($row['members_json'] ?? '[]', true)]);
+    Response::json(['data' => json_decode($row['members_json'] ?? '[]', true) ?? []]);
 }, $auth);
 
 $router->post('/api/shared-drives/sync', function (Request $req) {

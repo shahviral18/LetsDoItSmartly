@@ -21,8 +21,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = localStorage.getItem('ldis_token');
     if (!stored) { setLoading(false); return; }
-    api.get<{ id: number; name: string; email: string; role: string; userType: string }>('/auth/me')
-      .then(me => {
+    api.get<{ user: { id: number; name: string; email: string; role: string; userType: string } }>('/auth/me')
+      .then(res => {
+        const me = res.user;
         setUser({ id: String(me.id), name: me.name, email: me.email, role: me.role as AuthUser['role'] });
       })
       .catch(() => {

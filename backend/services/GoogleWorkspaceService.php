@@ -73,6 +73,21 @@ class GoogleWorkspaceService
         return new Google_Service_Drive($client);
     }
 
+    private static ?Google_Service_Drive $adminDriveService = null;
+
+    private static function getAdminDriveService(): Google_Service_Drive
+    {
+        if (self::$adminDriveService !== null) return self::$adminDriveService;
+        self::boot();
+        $client = new Google_Client();
+        $client->setApplicationName('LetsDoItSmartly');
+        $client->setAuthConfig(GOOGLE_CREDENTIALS);
+        $client->setScopes([self::DRIVE_SCOPE]);
+        $client->setSubject(GOOGLE_ADMIN_EMAIL);
+        self::$adminDriveService = new Google_Service_Drive($client);
+        return self::$adminDriveService;
+    }
+
     // ── Guard — only touch users that belong to LDIS-managed domains ─────────
 
     /**
@@ -449,14 +464,7 @@ class GoogleWorkspaceService
     public static function listSharedDrives(): array
     {
         try {
-            self::boot();
-            $client = new Google_Client();
-            $client->setApplicationName('LetsDoItSmartly');
-            $client->setAuthConfig(GOOGLE_CREDENTIALS);
-            $client->setScopes(['https://www.googleapis.com/auth/drive']);
-            $client->setSubject(GOOGLE_ADMIN_EMAIL);
-            $drive = new Google_Service_Drive($client);
-
+            $drive = self::getAdminDriveService();
             $result = [];
             $pageToken = null;
             do {
@@ -464,15 +472,10 @@ class GoogleWorkspaceService
                 if ($pageToken) $opts['pageToken'] = $pageToken;
                 $resp = $drive->drives->listDrives($opts);
                 foreach ($resp->getDrives() as $d) {
-                    $result[] = [
-                        'id'         => $d->getId(),
-                        'name'       => $d->getName(),
-                        'created_at' => $d->getCreatedTime(),
-                    ];
+                    $result[] = ['id' => $d->getId(), 'name' => $d->getName(), 'created_at' => $d->getCreatedTime()];
                 }
                 $pageToken = $resp->getNextPageToken();
             } while ($pageToken);
-
             return $result;
         } catch (Throwable $e) {
             Logger::error('[GWS] listSharedDrives FAILED: ' . $e->getMessage());
@@ -480,32 +483,19 @@ class GoogleWorkspaceService
         }
     }
 
-    /**
-     * List members (permissions) for a specific shared drive.
-     */
     public static function getSharedDriveMembers(string $driveId): array
     {
         try {
-            self::boot();
-            $client = new Google_Client();
-            $client->setApplicationName('LetsDoItSmartly');
-            $client->setAuthConfig(GOOGLE_CREDENTIALS);
-            $client->setScopes(['https://www.googleapis.com/auth/drive']);
-            $client->setSubject(GOOGLE_ADMIN_EMAIL);
-            $drive = new Google_Service_Drive($client);
-
-            $resp = $drive->permissions->listPermissions($driveId, [
-                'supportsAllDrives'     => true,
-                'useDomainAdminAccess'  => true,
-                'fields'                => 'permissions(id,emailAddress,role,type)',
+            $drive = self::getAdminDriveService();
+            $resp  = $drive->permissions->listPermissions($driveId, [
+                'supportsAllDrives'    => true,
+                'useDomainAdminAccess' => true,
+                'fields'               => 'permissions(id,emailAddress,role,type)',
             ]);
             $members = [];
             foreach ($resp->getPermissions() as $p) {
                 if ($p->getType() === 'user' && $p->getEmailAddress()) {
-                    $members[] = [
-                        'email' => $p->getEmailAddress(),
-                        'role'  => $p->getRole(),
-                    ];
+                    $members[] = ['email' => $p->getEmailAddress(), 'role' => $p->getRole()];
                 }
             }
             return $members;
@@ -575,8 +565,13 @@ class GoogleWorkspaceService
 
         self::updateSyncJob('shared_drives', 'running', 0, 0, 0);
 
-        $drives = self::listSharedDrives();
-        $total  = count($drives);
+        try {
+            $drives = self::listSharedDrives();
+        } catch (Throwable $e) {
+            self::updateSyncJob('shared_drives', 'failed', 0, 0, 0);
+            throw $e;
+        }
+        $total = count($drives);
         self::updateSyncJob('shared_drives', 'running', $total, 0, 0);
 
         foreach ($drives as $drive) {

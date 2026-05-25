@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Loader2, UserCircle, Save, Key, Globe, CheckCircle2, AlertCircle } from "lucide-react";
 import { api } from "../../lib/api";
 
@@ -38,6 +38,9 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [saveErr, setSaveErr] = useState('');
+  const saveMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pwMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (saveMsgTimer.current) clearTimeout(saveMsgTimer.current); if (pwMsgTimer.current) clearTimeout(pwMsgTimer.current); }, []);
 
   // Editable fields
   const [firstName, setFirstName] = useState('');
@@ -76,7 +79,7 @@ export default function ProfilePage() {
     try {
       await api.patch('/profile', { first_name: firstName, last_name: lastName, phone, company_name: companyName, gstin, billing_address: billingAddress });
       setSaveMsg('Profile updated successfully.');
-      setTimeout(() => setSaveMsg(''), 4000);
+      saveMsgTimer.current = setTimeout(() => setSaveMsg(''), 4000);
     } catch (err) {
       setSaveErr(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -93,7 +96,7 @@ export default function ProfilePage() {
       await api.patch('/profile/password', { current_password: currentPw, new_password: newPw });
       setPwMsg('Password changed successfully.');
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
-      setTimeout(() => setPwMsg(''), 4000);
+      pwMsgTimer.current = setTimeout(() => setPwMsg(''), 4000);
     } catch (err) {
       setPwErr(err instanceof Error ? err.message : 'Failed to change password');
     } finally {

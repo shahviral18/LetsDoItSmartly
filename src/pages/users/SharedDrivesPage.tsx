@@ -123,6 +123,7 @@ export function SharedDrivesPage() {
   const [selectedDrive, setSelectedDrive] = useState<SharedDrive | null>(null);
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState('');
 
   function loadDrives() {
     setLoading(true); setError('');
@@ -179,10 +180,10 @@ export function SharedDrivesPage() {
 
   function openDrive(drive: SharedDrive) {
     setSelectedDrive(drive);
-    setMembers([]); setMembersLoading(true);
+    setMembers([]); setMembersLoading(true); setMembersError('');
     api.get<{ data: DriveMember[] }>(`/shared-drives/${drive.id}/members`)
       .then(r => setMembers(r.data ?? []))
-      .catch(() => {})
+      .catch(e => setMembersError(e instanceof Error ? e.message : 'Failed to load members'))
       .finally(() => setMembersLoading(false));
   }
 
@@ -383,14 +384,14 @@ export function SharedDrivesPage() {
       </div>
 
       {selectedDrive && (
-        <MembersDrawer drive={selectedDrive} members={members} loading={membersLoading} onClose={() => setSelectedDrive(null)} />
+        <MembersDrawer drive={selectedDrive} members={members} loading={membersLoading} error={membersError} onClose={() => setSelectedDrive(null)} />
       )}
     </div>
   );
 }
 
-function MembersDrawer({ drive, members, loading, onClose }: {
-  drive: SharedDrive; members: DriveMember[]; loading: boolean; onClose: () => void;
+function MembersDrawer({ drive, members, loading, error, onClose }: {
+  drive: SharedDrive; members: DriveMember[]; loading: boolean; error: string; onClose: () => void;
 }) {
   const fmtDate = (iso?: string | null) =>
     iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : null;
@@ -426,12 +427,14 @@ function MembersDrawer({ drive, members, loading, onClose }: {
 
           {loading ? (
             <div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-[#1A7DC4]" /></div>
+          ) : error ? (
+            <div className="px-5 py-12 text-center text-sm text-red-500">{error}</div>
           ) : members.length === 0 ? (
             <div className="px-5 py-12 text-center text-sm text-slate-400">No members found</div>
           ) : (
             <ul className="divide-y divide-slate-50">
-              {members.map((m, i) => (
-                <li key={i} className="px-5 py-3.5 flex items-center justify-between gap-3">
+              {members.map((m) => (
+                <li key={m.email} className="px-5 py-3.5 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0"
                       style={{ background: 'linear-gradient(135deg,#0D5A96,#1A7DC4)' }}>
