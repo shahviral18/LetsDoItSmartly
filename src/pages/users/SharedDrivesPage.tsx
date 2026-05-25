@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { X, Users, Loader2, RefreshCw, Clock, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { X, Users, Loader2, RefreshCw, Clock, AlertCircle, Search, ChevronDown, Filter } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 
@@ -26,9 +26,84 @@ const roleBadgeStyles: Record<string, string> = {
   reader:         'bg-slate-100 text-slate-600',
 };
 
+const STAFF_ROLES = ['super_admin', 'admin', 'support_admin', 'account_manager', 'backoffice'];
+
+function DomainMultiSelect({ domains, selected, onChange }: {
+  domains: string[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = domains.filter(d => d.toLowerCase().includes(search.toLowerCase()));
+
+  function toggle(d: string) {
+    onChange(selected.includes(d) ? selected.filter(x => x !== d) : [...selected, d]);
+  }
+
+  const label = selected.length === 0 ? 'All Domains'
+    : selected.length === 1 ? selected[0]
+    : `${selected.length} domains`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 hover:border-[#1A7DC4] transition-colors min-w-[160px]">
+        <Filter size={13} className="text-slate-400 shrink-0" />
+        <span className="flex-1 text-left truncate">{label}</span>
+        {selected.length > 0 && (
+          <span className="shrink-0 w-4 h-4 rounded-full bg-[#1A7DC4] text-white text-[10px] flex items-center justify-center font-bold">
+            {selected.length}
+          </span>
+        )}
+        <ChevronDown size={13} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute top-full mt-1 left-0 z-50 w-64 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-slate-100">
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search domain…"
+              className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-[#1A7DC4]" />
+          </div>
+          <div className="max-h-56 overflow-y-auto">
+            {selected.length > 0 && (
+              <button onClick={() => onChange([])}
+                className="w-full text-left px-3 py-2 text-xs text-[#1A7DC4] font-medium hover:bg-blue-50 border-b border-slate-100">
+                Clear all
+              </button>
+            )}
+            {filtered.length === 0
+              ? <p className="px-3 py-4 text-xs text-slate-400 text-center">No domains found</p>
+              : filtered.map(d => (
+                <label key={d} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-slate-50 cursor-pointer">
+                  <input type="checkbox" checked={selected.includes(d)} onChange={() => toggle(d)}
+                    className="accent-[#1A7DC4]" />
+                  <span className="text-sm text-slate-700 truncate">{d}</span>
+                </label>
+              ))
+            }
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SharedDrivesPage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
+  const isStaff = STAFF_ROLES.includes(user?.role ?? '');
 
   const [drives, setDrives] = useState<SharedDrive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,18 +111,20 @@ export function SharedDrivesPage() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
+
+  // Filters (staff only)
+  const [nameSearch, setNameSearch] = useState('');
+  const [creatorSearch, setCreatorSearch] = useState('');
+  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+
   const [selectedDrive, setSelectedDrive] = useState<SharedDrive | null>(null);
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
 
   function loadDrives() {
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     api.get<{ data: SharedDrive[]; last_synced_at: string | null }>('/shared-drives')
-      .then(r => {
-        setDrives(r.data ?? []);
-        setLastSyncedAt(r.last_synced_at ?? null);
-      })
+      .then(r => { setDrives(r.data ?? []); setLastSyncedAt(r.last_synced_at ?? null); })
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load shared drives'))
       .finally(() => setLoading(false));
   }
@@ -55,8 +132,7 @@ export function SharedDrivesPage() {
   useEffect(() => { loadDrives(); }, []);
 
   async function triggerSync() {
-    setSyncing(true);
-    setSyncMsg('');
+    setSyncing(true); setSyncMsg('');
     try {
       const stats = await api.post<{ synced: number; errors: number; duration_sec: number }>('/shared-drives/sync', {});
       setSyncMsg(`Sync complete — ${stats.synced} drives synced in ${stats.duration_sec}s.`);
@@ -70,13 +146,31 @@ export function SharedDrivesPage() {
 
   function openDrive(drive: SharedDrive) {
     setSelectedDrive(drive);
-    setMembers([]);
-    setMembersLoading(true);
+    setMembers([]); setMembersLoading(true);
     api.get<{ data: DriveMember[] }>(`/shared-drives/${drive.id}/members`)
       .then(r => setMembers(r.data ?? []))
       .catch(() => {})
       .finally(() => setMembersLoading(false));
   }
+
+  // All unique domains for the multi-select
+  const allDomains = useMemo(() =>
+    [...new Set(drives.map(d => d.domain).filter(Boolean))].sort(),
+    [drives]
+  );
+
+  // Apply filters (staff only)
+  const filtered = useMemo(() => {
+    if (!isStaff) return drives;
+    return drives.filter(d => {
+      if (nameSearch && !d.name.toLowerCase().includes(nameSearch.toLowerCase())) return false;
+      if (creatorSearch && !d.creator_email.toLowerCase().includes(creatorSearch.toLowerCase())) return false;
+      if (selectedDomains.length > 0 && !selectedDomains.includes(d.domain)) return false;
+      return true;
+    });
+  }, [drives, nameSearch, creatorSearch, selectedDomains, isStaff]);
+
+  const hasFilters = nameSearch || creatorSearch || selectedDomains.length > 0;
 
   const fmtDate = (iso?: string | null) =>
     iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -85,12 +179,15 @@ export function SharedDrivesPage() {
     iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
-    <div className="max-w-5xl space-y-5">
+    <div className="max-w-6xl space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Shared Drives</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {loading ? 'Loading…' : error ? 'Error loading drives' : `${drives.length} shared drives · click a row to see members`}
+            {loading ? 'Loading…' : error ? 'Error loading drives'
+              : isStaff && hasFilters
+                ? `${filtered.length} of ${drives.length} drives`
+                : `${drives.length} shared drives · click a row to see members`}
           </p>
         </div>
         {isSuperAdmin && (
@@ -107,8 +204,7 @@ export function SharedDrivesPage() {
         <Clock size={14} className="shrink-0" />
         <span>
           Data is <strong>24–48 hours old</strong>. Shared drives created recently may not appear yet.
-          {fmtDateTime(lastSyncedAt) && <> Last synced: <strong>{fmtDateTime(lastSyncedAt)}</strong>.</>}
-          {!lastSyncedAt && <> No sync has run yet — data will appear after the first sync.</>}
+          {fmtDateTime(lastSyncedAt) ? <> Last synced: <strong>{fmtDateTime(lastSyncedAt)}</strong>.</> : <> No sync has run yet — data will appear after the first sync.</>}
         </span>
       </div>
 
@@ -122,27 +218,50 @@ export function SharedDrivesPage() {
         <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>
       )}
 
+      {/* Staff filters */}
+      {isStaff && !loading && drives.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[180px] max-w-xs">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={nameSearch} onChange={e => setNameSearch(e.target.value)}
+              placeholder="Search by drive name…"
+              className="w-full h-9 pl-8 pr-3 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:border-[#1A7DC4]" />
+          </div>
+          <div className="relative flex-1 min-w-[180px] max-w-xs">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={creatorSearch} onChange={e => setCreatorSearch(e.target.value)}
+              placeholder="Search by creator email…"
+              className="w-full h-9 pl-8 pr-3 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:border-[#1A7DC4]" />
+          </div>
+          <DomainMultiSelect domains={allDomains} selected={selectedDomains} onChange={setSelectedDomains} />
+          {hasFilters && (
+            <button onClick={() => { setNameSearch(''); setCreatorSearch(''); setSelectedDomains([]); }}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-200 text-sm text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors">
+              <X size={13} /> Clear
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 size={24} className="animate-spin text-[#1A7DC4]" /></div>
-          ) : drives.length === 0 && !error ? (
+          ) : filtered.length === 0 ? (
             <div className="py-16 text-center text-slate-400 text-sm">
-              No shared drives found.{isSuperAdmin && ' Click "Refresh Data" to sync from Google.'}
+              {hasFilters ? 'No drives match your filters.' : `No shared drives found.${isSuperAdmin ? ' Click "Refresh Data" to sync from Google.' : ''}`}
             </div>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
                   {['Sr.No', 'Name', 'Creator', 'Domain', 'Created Date', 'Members'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {drives.map((drive, idx) => (
+                {filtered.map((drive, idx) => (
                   <tr key={drive.id} onClick={() => openDrive(drive)}
                     className="hover:bg-[#F0F7FF] cursor-pointer transition-colors">
                     <td className="px-4 py-3 text-slate-400 font-mono text-xs">{String(idx + 1).padStart(2, '0')}</td>
@@ -208,9 +327,7 @@ function MembersDrawer({ drive, members, loading, onClose }: {
 
         <div className="flex-1 overflow-y-auto">
           <div className="px-5 py-4 border-b border-slate-100 space-y-0.5">
-            <p className="text-xs text-slate-500">
-              Created by <span className="font-medium text-slate-700">{drive.creator_email || '—'}</span>
-            </p>
+            <p className="text-xs text-slate-500">Creator: <span className="font-medium text-slate-700">{drive.creator_email || '—'}</span></p>
             {drive.domain && <p className="text-xs text-slate-500">Domain: <span className="font-medium text-blue-600">{drive.domain}</span></p>}
             {fmtDate(drive.created_at) && <p className="text-xs text-slate-500">Created: <span className="font-medium text-slate-700">{fmtDate(drive.created_at)}</span></p>}
           </div>
