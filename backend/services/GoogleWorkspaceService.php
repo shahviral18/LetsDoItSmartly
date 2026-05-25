@@ -515,6 +515,36 @@ class GoogleWorkspaceService
         }
     }
 
+    public static function ensureSyncJobTable(): void
+    {
+        Database::execute("CREATE TABLE IF NOT EXISTS sync_jobs (
+            job         VARCHAR(64)  NOT NULL PRIMARY KEY,
+            status      VARCHAR(32)  NOT NULL DEFAULT 'idle',
+            total       INT UNSIGNED NOT NULL DEFAULT 0,
+            done        INT UNSIGNED NOT NULL DEFAULT 0,
+            errors      INT UNSIGNED NOT NULL DEFAULT 0,
+            started_at  DATETIME     DEFAULT NULL,
+            finished_at DATETIME     DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", []);
+    }
+
+    public static function updateSyncJob(string $job, string $status, int $total, int $done, int $errors): void
+    {
+        self::ensureSyncJobTable();
+        $finished = in_array($status, ['done', 'failed']) ? 'NOW()' : 'NULL';
+        $started  = $status === 'running' ? 'NOW()' : 'started_at';
+        Database::execute(
+            "INSERT INTO sync_jobs (job, status, total, done, errors, started_at, finished_at)
+             VALUES (:job, :st, :tot, :done, :err, NOW(), $finished)
+             ON DUPLICATE KEY UPDATE
+               status = VALUES(status), total = VALUES(total), done = VALUES(done),
+               errors = VALUES(errors),
+               started_at  = IF(VALUES(status) = 'running', NOW(), started_at),
+               finished_at = $finished",
+            [':job' => $job, ':st' => $status, ':tot' => $total, ':done' => $done, ':err' => $errors]
+        );
+    }
+
     /**
      * Full sync: fetch all shared drives + members from Google, upsert into shared_drives table.
      * Called by nightly cron and manual refresh endpoint.
@@ -543,80 +573,37 @@ class GoogleWorkspaceService
             Database::execute("ALTER TABLE shared_drives ADD COLUMN storage_mb BIGINT UNSIGNED NOT NULL DEFAULT 0", []);
         } catch (Throwable $e) { /* column already exists */ }
 
-        // Build admin Drive client once (reuse across drives)
-        self::boot();
-        $client = new Google_Client();
-        $client->setApplicationName('LetsDoItSmartly');
-        $client->setAuthConfig(GOOGLE_CREDENTIALS);
-        $client->setScopes(['https://www.googleapis.com/auth/drive']);
-        $client->setSubject(GOOGLE_ADMIN_EMAIL);
-        $driveService = new Google_Service_Drive($client);
+        self::updateSyncJob('shared_drives', 'running', 0, 0, 0);
 
         $drives = self::listSharedDrives();
+        $total  = count($drives);
+        self::updateSyncJob('shared_drives', 'running', $total, 0, 0);
 
         foreach ($drives as $drive) {
             $createdAt = $drive['created_at']
                 ? date('Y-m-d H:i:s', strtotime($drive['created_at']))
                 : null;
 
-            // Fetch members — don't skip drive if this fails
-            $members     = [];
-            $membersJson = '[]';
-            $memberCount = 0;
             try {
-                $members     = self::getSharedDriveMembers($drive['id']);
-                $membersJson = json_encode($members);
-                $memberCount = count($members);
-            } catch (Throwable $e) {
-                Logger::error("[GWS] getMembers failed for {$drive['id']} ({$drive['name']}): " . $e->getMessage());
-            }
-
-            // Derive creator from first organizer
-            $creatorEmail = '';
-            foreach ($members as $m) {
-                if (($m['role'] ?? '') === 'organizer') { $creatorEmail = $m['email']; break; }
-            }
-            $domain = $creatorEmail && str_contains($creatorEmail, '@')
-                ? strtolower(explode('@', $creatorEmail)[1])
-                : '';
-
-            // Fetch storage usage for this drive
-            $storageMb = 0;
-            try {
-                $driveDetail = $driveService->drives->get($drive['id'], [
-                    'useDomainAdminAccess' => true,
-                    'fields' => 'storageQuota',
-                ]);
-                $quota = $driveDetail->getStorageQuota();
-                if ($quota) {
-                    $usageBytes = (int)($quota->getUsageInDrive() ?? 0);
-                    $storageMb  = (int)round($usageBytes / 1048576);
-                }
-            } catch (Throwable $e) {
-                Logger::error("[GWS] getStorage failed for {$drive['id']}: " . $e->getMessage());
-            }
-
-            try {
+                // Preserve existing members_json/creator_email/domain if already synced
+                $existing = Database::queryOne(
+                    'SELECT creator_email, domain, member_count, members_json FROM shared_drives WHERE id = :id',
+                    [':id' => $drive['id']]
+                );
                 Database::execute(
                     "INSERT INTO shared_drives (id, name, creator_email, domain, member_count, members_json, storage_mb, created_at, last_synced_at)
-                     VALUES (:id, :name, :ce, :dom, :mc, :mj, :sm, :ca, NOW())
+                     VALUES (:id, :name, :ce, :dom, :mc, :mj, 0, :ca, NOW())
                      ON DUPLICATE KEY UPDATE
                        name           = VALUES(name),
-                       creator_email  = VALUES(creator_email),
-                       domain         = VALUES(domain),
-                       member_count   = VALUES(member_count),
-                       members_json   = VALUES(members_json),
-                       storage_mb     = VALUES(storage_mb),
                        created_at     = VALUES(created_at),
                        last_synced_at = NOW()",
                     [
                         ':id'   => $drive['id'],
                         ':name' => $drive['name'],
-                        ':ce'   => $creatorEmail,
-                        ':dom'  => $domain,
-                        ':mc'   => $memberCount,
-                        ':mj'   => $membersJson,
-                        ':sm'   => $storageMb,
+                        ':ce'   => $existing['creator_email'] ?? '',
+                        ':dom'  => $existing['domain'] ?? '',
+                        ':mc'   => $existing['member_count'] ?? 0,
+                        ':mj'   => $existing['members_json'] ?? '[]',
                         ':ca'   => $createdAt,
                     ]
                 );
@@ -625,10 +612,14 @@ class GoogleWorkspaceService
                 Logger::error("[GWS] upsert failed for {$drive['id']}: " . $e->getMessage());
                 $errors++;
             }
+
+            self::updateSyncJob('shared_drives', 'running', $total, $synced + $errors, $errors);
         }
 
         $duration = round(microtime(true) - $start, 1);
         Logger::info("[GWS] syncSharedDrivesToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
+
+        self::updateSyncJob('shared_drives', 'done', $total, $synced + $errors, $errors);
 
         return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
     }

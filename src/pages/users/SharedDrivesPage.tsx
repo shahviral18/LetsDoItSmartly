@@ -145,37 +145,31 @@ export function SharedDrivesPage() {
 
   useEffect(() => () => stopPolling(), []);
 
-  function startPolling() {
-    syncStartRef.current = Date.now();
-    setElapsed(0);
-    elapsedRef.current = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - (syncStartRef.current ?? Date.now())) / 1000));
-    }, 1000);
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await api.get<{ status: string; total: number; done: number; errors: number } | null>('/shared-drives/sync-status');
-        if (status) {
-          setSyncProgress({ status: status.status, total: status.total, done: status.done, errors: status.errors });
-          if (status.status === 'done' || status.status === 'failed') {
-            stopPolling();
-            setSyncing(false);
-            setSyncProgress(prev => prev ? { ...prev, status: status.status } : null);
-            setSyncMsg(status.status === 'done'
-              ? `Sync complete — ${status.done - status.errors} drives synced, ${status.errors} errors.`
-              : 'Sync failed. Check server logs.');
-            loadDrives();
-          }
-        }
-      } catch { /* ignore poll errors */ }
-    }, 2000);
-  }
 
   async function triggerSync() {
     setSyncing(true); setSyncMsg(''); setSyncProgress(null);
-    startPolling();
+    syncStartRef.current = Date.now();
+    setElapsed(0);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    elapsedRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - (syncStartRef.current ?? Date.now())) / 1000));
+    }, 1000);
+    // Poll sync-status while the POST runs (POST is synchronous, may take 30-60s)
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await api.get<{ status: string; total: number; done: number; errors: number } | null>('/shared-drives/sync-status');
+        if (status && status.status && status.status !== 'idle') {
+          setSyncProgress({ status: status.status, total: status.total, done: status.done, errors: status.errors });
+        }
+      } catch { /* ignore */ }
+    }, 2000);
     try {
-      await api.post<{ synced: number; errors: number; duration_sec: number }>('/shared-drives/sync', {});
+      const stats = await api.post<{ synced: number; errors: number; duration_sec: number }>('/shared-drives/sync', {});
+      stopPolling();
+      setSyncing(false);
+      setSyncMsg(`Sync complete — ${stats.synced} drives synced in ${Math.round(stats.duration_sec)}s.`);
+      loadDrives();
     } catch (e) {
       stopPolling();
       setSyncing(false);
@@ -241,8 +235,8 @@ export function SharedDrivesPage() {
             <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
             {syncing
               ? syncProgress && syncProgress.total > 0
-                ? `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%`
-                : 'Starting…'
+                ? `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}% · ${elapsed}s`
+                : `${elapsed}s…`
               : 'Refresh Data'}
           </button>
         )}
@@ -257,30 +251,40 @@ export function SharedDrivesPage() {
         </span>
       </div>
 
-      {syncing && syncProgress && syncProgress.total > 0 && (
+      {syncing && (
         <div className="px-4 py-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2 text-blue-700 font-medium">
               <Loader2 size={14} className="animate-spin shrink-0" />
-              <span>Syncing drives…</span>
+              <span>{syncProgress && syncProgress.total > 0 ? 'Syncing drives…' : 'Connecting to Google…'}</span>
             </div>
             <div className="flex items-center gap-3 text-xs text-blue-600">
-              {syncProgress.errors > 0 && (
+              {syncProgress && syncProgress.errors > 0 && (
                 <span className="text-amber-600 font-medium">{syncProgress.errors} errors</span>
               )}
               <span className="flex items-center gap-1">
                 <Clock size={11} />
-                {elapsed}s
+                {elapsed}s elapsed
               </span>
             </div>
           </div>
           <div className="w-full bg-blue-100 rounded-full h-2.5 overflow-hidden">
-            <div className="h-full bg-[#1A7DC4] rounded-full transition-all duration-500"
-              style={{ width: `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%` }} />
+            {syncProgress && syncProgress.total > 0 ? (
+              <div className="h-full bg-[#1A7DC4] rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%` }} />
+            ) : (
+              <div className="h-full bg-[#1A7DC4] rounded-full animate-pulse w-1/4" />
+            )}
           </div>
           <div className="flex items-center justify-between text-xs text-blue-600">
-            <span>{syncProgress.done} of {syncProgress.total} drives</span>
-            <span className="font-semibold">{Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%</span>
+            {syncProgress && syncProgress.total > 0 ? (
+              <>
+                <span>{syncProgress.done} of {syncProgress.total} drives processed</span>
+                <span className="font-semibold">{Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%</span>
+              </>
+            ) : (
+              <span>Fetching drive list from Google — this may take 10–30 seconds…</span>
+            )}
           </div>
         </div>
       )}

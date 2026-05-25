@@ -470,6 +470,12 @@ $router->get('/api/shared-drives', function (Request $req) {
     Response::json(['data' => $drives, 'last_synced_at' => $lastSynced['ts'] ?? null]);
 }, $auth);
 
+$router->get('/api/shared-drives/sync-status', function (Request $req) {
+    GoogleWorkspaceService::ensureSyncJobTable();
+    $row = Database::queryOne("SELECT * FROM sync_jobs WHERE job = 'shared_drives'");
+    Response::json($row ?? ['status' => 'idle', 'total' => 0, 'done' => 0, 'errors' => 0]);
+}, $superAdmin);
+
 $router->get('/api/shared-drives/:driveId/members', function (Request $req) {
     $driveId = $req->params['driveId'] ?? '';
     if (!$driveId) Response::error('Drive ID required', 400);
@@ -479,21 +485,24 @@ $router->get('/api/shared-drives/:driveId/members', function (Request $req) {
 }, $auth);
 
 $router->post('/api/shared-drives/sync', function (Request $req) {
-    try {
-        $stats = GoogleWorkspaceService::syncSharedDrivesToDb();
-        Response::json($stats);
-    } catch (Throwable $e) {
-        Response::error('Sync failed: ' . $e->getMessage(), 500);
-    }
+    set_time_limit(0);
+    ini_set('memory_limit', '512M');
+    ignore_user_abort(true);
+    $stats = GoogleWorkspaceService::syncSharedDrivesToDb();
+    Response::json($stats);
 }, $superAdmin);
 
 $router->get('/api/cron/sync-shared-drives', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    set_time_limit(0);
+    ini_set('memory_limit', '512M');
+    ignore_user_abort(true);
     try {
         $stats = GoogleWorkspaceService::syncSharedDrivesToDb();
         Response::json($stats);
     } catch (Throwable $e) {
+        GoogleWorkspaceService::updateSyncJob('shared_drives', 'failed', 0, 0, 0);
         Response::error('Sync failed: ' . $e->getMessage(), 500);
     }
 });
