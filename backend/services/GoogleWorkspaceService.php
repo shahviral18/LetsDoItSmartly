@@ -460,20 +460,14 @@ class GoogleWorkspaceService
             $result = [];
             $pageToken = null;
             do {
-                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime,creatorEmail)'];
+                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime)'];
                 if ($pageToken) $opts['pageToken'] = $pageToken;
                 $resp = $drive->drives->listDrives($opts);
                 foreach ($resp->getDrives() as $d) {
-                    $creatorEmail = $d->getCreatorEmail() ?? '';
-                    $domain = $creatorEmail && str_contains($creatorEmail, '@')
-                        ? strtolower(explode('@', $creatorEmail)[1])
-                        : '';
                     $result[] = [
-                        'id'            => $d->getId(),
-                        'name'          => $d->getName(),
-                        'creator_email' => $creatorEmail,
-                        'domain'        => $domain,
-                        'created_at'    => $d->getCreatedTime(),
+                        'id'         => $d->getId(),
+                        'name'       => $d->getName(),
+                        'created_at' => $d->getCreatedTime(),
                     ];
                 }
                 $pageToken = $resp->getNextPageToken();
@@ -553,6 +547,15 @@ class GoogleWorkspaceService
                     ? date('Y-m-d H:i:s', strtotime($drive['created_at']))
                     : null;
 
+                // Derive creator from first organizer in members list
+                $creatorEmail = '';
+                foreach ($members as $m) {
+                    if (($m['role'] ?? '') === 'organizer') { $creatorEmail = $m['email']; break; }
+                }
+                $domain = $creatorEmail && str_contains($creatorEmail, '@')
+                    ? strtolower(explode('@', $creatorEmail)[1])
+                    : '';
+
                 Database::execute(
                     "INSERT INTO shared_drives (id, name, creator_email, domain, member_count, members_json, created_at, last_synced_at)
                      VALUES (:id, :name, :ce, :dom, :mc, :mj, :ca, NOW())
@@ -565,13 +568,13 @@ class GoogleWorkspaceService
                        created_at     = VALUES(created_at),
                        last_synced_at = NOW()",
                     [
-                        ':id'  => $drive['id'],
+                        ':id'   => $drive['id'],
                         ':name' => $drive['name'],
-                        ':ce'  => $drive['creator_email'],
-                        ':dom' => $drive['domain'],
-                        ':mc'  => $memberCount,
-                        ':mj'  => $membersJson,
-                        ':ca'  => $createdAt,
+                        ':ce'   => $creatorEmail,
+                        ':dom'  => $domain,
+                        ':mc'   => $memberCount,
+                        ':mj'   => $membersJson,
+                        ':ca'   => $createdAt,
                     ]
                 );
                 $synced++;
