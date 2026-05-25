@@ -161,7 +161,6 @@ export function SharedDrivesPage() {
 
   // Apply filters (staff only)
   const filtered = useMemo(() => {
-    if (!isStaff) return drives;
     return drives.filter(d => {
       if (nameSearch && !d.name.toLowerCase().includes(nameSearch.toLowerCase())) return false;
       if (creatorSearch && !d.creator_email.toLowerCase().includes(creatorSearch.toLowerCase())) return false;
@@ -185,7 +184,7 @@ export function SharedDrivesPage() {
           <h1 className="text-xl font-semibold text-slate-800">Shared Drives</h1>
           <p className="text-sm text-slate-500 mt-0.5">
             {loading ? 'Loading…' : error ? 'Error loading drives'
-              : isStaff && hasFilters
+              : hasFilters
                 ? `${filtered.length} of ${drives.length} drives`
                 : `${drives.length} shared drives · click a row to see members`}
           </p>
@@ -218,8 +217,8 @@ export function SharedDrivesPage() {
         <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>
       )}
 
-      {/* Staff filters */}
-      {isStaff && !loading && drives.length > 0 && (
+      {/* Filters */}
+      {!loading && drives.length > 0 && (
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[180px] max-w-xs">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
