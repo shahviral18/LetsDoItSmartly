@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Users, Loader2, RefreshCw, Clock, AlertCircle, Search, ChevronDown, Filter } from 'lucide-react';
+import { X, Users, Loader2, RefreshCw, Clock, AlertCircle, Search, ChevronDown, Filter, CheckCircle2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 
@@ -112,6 +112,8 @@ export function SharedDrivesPage() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
+  const [syncProgress, setSyncProgress] = useState<{ total: number; done: number; errors: number; status: string } | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Filters (staff only)
   const [nameSearch, setNameSearch] = useState('');
@@ -132,16 +134,52 @@ export function SharedDrivesPage() {
 
   useEffect(() => { loadDrives(); }, []);
 
+  const syncStartRef = useRef<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+  }
+
+  useEffect(() => () => stopPolling(), []);
+
+  function startPolling() {
+    syncStartRef.current = Date.now();
+    setElapsed(0);
+    elapsedRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - (syncStartRef.current ?? Date.now())) / 1000));
+    }, 1000);
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await api.get<{ status: string; total: number; done: number; errors: number } | null>('/shared-drives/sync-status');
+        if (status) {
+          setSyncProgress({ status: status.status, total: status.total, done: status.done, errors: status.errors });
+          if (status.status === 'done' || status.status === 'failed') {
+            stopPolling();
+            setSyncing(false);
+            setSyncProgress(prev => prev ? { ...prev, status: status.status } : null);
+            setSyncMsg(status.status === 'done'
+              ? `Sync complete — ${status.done - status.errors} drives synced, ${status.errors} errors.`
+              : 'Sync failed. Check server logs.');
+            loadDrives();
+          }
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+  }
+
   async function triggerSync() {
-    setSyncing(true); setSyncMsg('');
+    setSyncing(true); setSyncMsg(''); setSyncProgress(null);
+    startPolling();
     try {
-      const stats = await api.post<{ synced: number; errors: number; duration_sec: number }>('/shared-drives/sync', {});
-      setSyncMsg(`Sync complete — ${stats.synced} drives synced in ${stats.duration_sec}s.`);
-      loadDrives();
+      await api.post<{ synced: number; errors: number; duration_sec: number }>('/shared-drives/sync', {});
     } catch (e) {
-      setSyncMsg(e instanceof Error ? e.message : 'Sync failed');
-    } finally {
+      stopPolling();
       setSyncing(false);
+      setSyncMsg(e instanceof Error ? e.message : 'Sync failed');
     }
   }
 
@@ -201,7 +239,11 @@ export function SharedDrivesPage() {
           <button onClick={triggerSync} disabled={syncing}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#1A7DC4] hover:bg-[#0D5A96] text-white text-sm font-medium transition-colors disabled:opacity-60 shrink-0">
             <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-            {syncing ? 'Syncing…' : 'Refresh Data'}
+            {syncing
+              ? syncProgress && syncProgress.total > 0
+                ? `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%`
+                : 'Starting…'
+              : 'Refresh Data'}
           </button>
         )}
       </div>
@@ -215,9 +257,40 @@ export function SharedDrivesPage() {
         </span>
       </div>
 
+      {syncing && syncProgress && syncProgress.total > 0 && (
+        <div className="px-4 py-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2 text-blue-700 font-medium">
+              <Loader2 size={14} className="animate-spin shrink-0" />
+              <span>Syncing drives…</span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-blue-600">
+              {syncProgress.errors > 0 && (
+                <span className="text-amber-600 font-medium">{syncProgress.errors} errors</span>
+              )}
+              <span className="flex items-center gap-1">
+                <Clock size={11} />
+                {elapsed}s
+              </span>
+            </div>
+          </div>
+          <div className="w-full bg-blue-100 rounded-full h-2.5 overflow-hidden">
+            <div className="h-full bg-[#1A7DC4] rounded-full transition-all duration-500"
+              style={{ width: `${Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%` }} />
+          </div>
+          <div className="flex items-center justify-between text-xs text-blue-600">
+            <span>{syncProgress.done} of {syncProgress.total} drives</span>
+            <span className="font-semibold">{Math.min(100, Math.round((syncProgress.done / syncProgress.total) * 100))}%</span>
+          </div>
+        </div>
+      )}
+
       {syncMsg && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-sm">
-          <AlertCircle size={14} className="shrink-0" />{syncMsg}
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm border ${syncMsg.startsWith('Sync complete') ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {syncMsg.startsWith('Sync complete')
+            ? <CheckCircle2 size={14} className="shrink-0" />
+            : <AlertCircle size={14} className="shrink-0" />}
+          {syncMsg}
         </div>
       )}
 
