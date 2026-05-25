@@ -78,9 +78,10 @@ export default function BccRequestDetailPage() {
 
   const updateStatus = async (newStatus: BccStatus, note?: string) => {
     if (!req) return;
+    const reqId = req.id;
     setActionLoading(newStatus);
     await new Promise(r => setTimeout(r, 800));
-    updateBccStatus(req.id, newStatus, user?.name ?? "Staff", note);
+    updateBccStatus(reqId, newStatus, user?.name ?? "Staff", note);
     setActionLoading(null);
     setShowRejectInput(false);
     if (newStatus === "completed") navigate("/surveillance");

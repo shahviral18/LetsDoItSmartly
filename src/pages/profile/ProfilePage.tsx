@@ -34,6 +34,7 @@ function Field({ label, value, onChange, type = "text", required }: {
 export default function ProfilePage() {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [saveErr, setSaveErr] = useState('');
@@ -65,7 +66,7 @@ export default function ProfilePage() {
         setGstin(data.gstin ?? '');
         setBillingAddress(data.billing_address ?? '');
       })
-      .catch(() => {})
+      .catch(e => setLoadErr(e instanceof Error ? e.message : 'Failed to load profile'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -102,6 +103,9 @@ export default function ProfilePage() {
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>;
+  }
+  if (loadErr) {
+    return <div className="p-6 flex items-center gap-2 text-danger text-sm"><AlertCircle className="w-4 h-4 shrink-0" />{loadErr}</div>;
   }
 
   return (
@@ -167,18 +171,22 @@ export default function ProfilePage() {
         </form>
       </div>
 
-      {/* Linked domains */}
-      {profile?.domains && profile.domains.length > 0 && (
+      {/* Linked domains — only relevant for domain_owner accounts */}
+      {profile?.role === 'domain_owner' && (
         <div className="bg-card rounded-xl border border-border shadow-card p-6">
           <h2 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2"><Globe className="w-4 h-4 text-primary" /> Linked Domains</h2>
-          <div className="space-y-2">
-            {profile.domains.map(d => (
-              <div key={d.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-2 border border-border/40">
-                <Globe className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span className="text-sm font-medium text-foreground">{d.name}</span>
-              </div>
-            ))}
-          </div>
+          {profile.domains && profile.domains.length > 0 ? (
+            <div className="space-y-2">
+              {profile.domains.map(d => (
+                <div key={d.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-2 border border-border/40">
+                  <Globe className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="text-sm font-medium text-foreground">{d.name}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No domains linked to your account.</p>
+          )}
         </div>
       )}
     </div>

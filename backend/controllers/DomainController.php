@@ -43,6 +43,10 @@ class DomainController
             [':id' => $id]
         );
         if (!$d) Response::error('Not found', 404);
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$d['billing_entity_id'] !== (int)$pu['billing_entity_id']) Response::error('Not found', 404);
+        }
         $d['user_count'] = Database::count('workspace_users', 'domain_id = :id', [':id' => $id]);
         Response::json($d);
     }
@@ -76,6 +80,14 @@ class DomainController
         $id = (int) $req->param('id');
         $b  = $req->body;
         $sets = []; $params = [':id' => $id];
+        if (array_key_exists('name', $b)) {
+            $name = strtolower(trim($b['name']));
+            if (!$name) Response::error('name cannot be empty.', 400);
+            if (Database::queryOne('SELECT id FROM domains WHERE name = :n AND id != :id', [':n' => $name, ':id' => $id])) {
+                Response::error('Domain name already exists.', 409);
+            }
+            $sets[] = 'name = :name'; $params[':name'] = $name;
+        }
         foreach (['ou_path','is_active'] as $f) {
             if (array_key_exists($f, $b)) { $sets[] = "$f = :$f"; $params[":$f"] = $b[$f]; }
         }

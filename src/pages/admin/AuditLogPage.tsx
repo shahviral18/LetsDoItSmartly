@@ -45,8 +45,8 @@ export default function AuditLogPage() {
 
   const filtered = log.filter(entry => {
     if (roleFilter !== 'all' && entry.actor_role !== roleFilter) return false;
-    if (dateFrom && entry.created_at < dateFrom) return false;
-    if (dateTo && entry.created_at > dateTo + 'T23:59:59Z') return false;
+    if (dateFrom && new Date(entry.created_at) < new Date(dateFrom)) return false;
+    if (dateTo && new Date(entry.created_at) > new Date(dateTo + 'T23:59:59Z')) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!entry.actor_name.toLowerCase().includes(q) && !entry.target.toLowerCase().includes(q) && !entry.detail.toLowerCase().includes(q)) return false;
@@ -62,7 +62,7 @@ export default function AuditLogPage() {
       <ExportBar
         title="Portal Audit Log"
         subtitle={loading ? 'Loading…' : `${filtered.length} of ${log.length} entries`}
-        onExportCSV={() => exportCSV('audit-log', headers, rows.map(r => [r]))}
+        onExportCSV={() => exportCSV('audit-log', headers, rows)}
         onExportPDF={() => exportPDF('audit-log', 'Portal Audit Log', headers, rows)}
       />
 

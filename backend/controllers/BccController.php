@@ -25,6 +25,10 @@ class BccController
         $id  = (int) $req->param('id');
         $row = Database::queryOne('SELECT * FROM bcc_requests WHERE id = :id', [':id' => $id]);
         if (!$row) Response::error('Not found', 404);
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$row['billing_entity_id'] !== (int)$pu['billing_entity_id']) Response::error('Not found', 404);
+        }
         $row['affected_users'] = json_decode($row['affected_users'], true);
         $row['directions']     = json_decode($row['directions'], true);
         Response::json($row);

@@ -7,7 +7,6 @@ interface SharedDrive {
   name: string;
   createdBy: string;
   createdAt: string;
-  sizeMb: number;
   membersCount: number;
 }
 
@@ -24,11 +23,6 @@ const roleBadgeStyles: Record<string, string> = {
   reader:           'bg-slate-100 text-slate-600',
 };
 
-function fmtSize(mb: number) {
-  if (!mb) return '—';
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${mb} MB`;
-}
 
 export function SharedDrivesPage() {
   const [drives, setDrives] = useState<SharedDrive[]>([]);
@@ -78,7 +72,7 @@ export function SharedDrivesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
-                  {['Sr.No', 'Name', 'Created By', 'Created Date', 'Size', 'Members'].map(h => (
+                  {['Sr.No', 'Name', 'Created By', 'Created Date', 'Members'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">
                       {h}
                     </th>
@@ -105,7 +99,6 @@ export function SharedDrivesPage() {
                     <td className="px-4 py-3 text-slate-500">
                       {drive.createdAt ? new Date(drive.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-slate-600 font-medium">{fmtSize(drive.sizeMb)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5 text-slate-600">
                         <Users size={13} className="text-slate-400" />
@@ -136,7 +129,7 @@ function MembersDrawer({ drive, members, loading, onClose }: { drive: SharedDriv
           style={{ background: 'linear-gradient(135deg,#1A7DC4,#29ABE2)' }}>
           <div>
             <h2 className="text-base font-semibold">{drive.name}</h2>
-            <p className="text-sm text-blue-100 mt-0.5">{drive.membersCount} members · {fmtSize(drive.sizeMb)}</p>
+            <p className="text-sm text-blue-100 mt-0.5">{drive.membersCount} members</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center hover:bg-white/30 transition-colors mt-0.5">
             <X size={15} />

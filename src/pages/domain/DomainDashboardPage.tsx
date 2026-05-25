@@ -90,7 +90,11 @@ export default function DomainDashboardPage() {
             );
           })}
           {domains.length === 0 && (
-            <div className="text-center py-12 text-slate-400 text-sm">No domains found. Run Google Sync first.</div>
+            <div className="text-center py-12 text-slate-400 text-sm">
+              {isDomainOwner
+                ? 'No domains linked to your account. Please contact your administrator.'
+                : 'No domains found. Run Google Sync first.'}
+            </div>
           )}
         </div>
       )}

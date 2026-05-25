@@ -42,7 +42,7 @@ export function DomainProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [user?.id]);
+  }, [user?.id, user?.role]);
 
   return (
     <DomainContext.Provider value={{ domains, selectedDomain, setSelectedDomain, loading }}>

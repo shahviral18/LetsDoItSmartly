@@ -87,7 +87,7 @@ export default function SecurityAlertsPage() {
       <ExportBar
         title="Security Alerts"
         subtitle={loading ? 'Loading…' : `${alerts.filter(a => !a.resolved).length} unresolved alerts`}
-        onExportCSV={() => exportCSV('security-alerts', headers, rows.map(r => [r]))}
+        onExportCSV={() => exportCSV('security-alerts', headers, rows)}
         onExportPDF={() => exportPDF('security-alerts', 'Security Alerts', headers, rows)}
       >
         <div className="flex rounded-lg border border-slate-200 overflow-hidden text-sm">

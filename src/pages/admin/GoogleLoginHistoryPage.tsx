@@ -58,19 +58,17 @@ export default function GoogleLoginHistoryPage() {
 
   useEffect(() => {
     api.get<{ data: GUser[] }>('/google/users')
-      .then(r => {
-        const list = r.data ?? [];
-        setUsers(list);
-        // Auto-open user if ?email= param present
-        const emailParam = searchParams.get('email');
-        if (emailParam) {
-          const match = list.find(u => u.email.toLowerCase() === emailParam.toLowerCase());
-          if (match) openUser(match);
-        }
-      })
+      .then(r => setUsers(r.data ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    const emailParam = searchParams.get('email');
+    if (!emailParam || users.length === 0 || loading) return;
+    const match = users.find(u => u.email.toLowerCase() === emailParam.toLowerCase());
+    if (match) openUser(match);
+  }, [searchParams, users]);
 
   function openUser(u: GUser) {
     setSelected(u);

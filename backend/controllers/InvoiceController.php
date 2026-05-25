@@ -20,6 +20,10 @@ class InvoiceController
         $id  = (int) $req->param('id');
         $inv = Database::queryOne('SELECT * FROM invoices WHERE id = :id', [':id' => $id]);
         if (!$inv) Response::error('Not found', 404);
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$inv['billing_entity_id'] !== (int)$pu['billing_entity_id']) Response::error('Not found', 404);
+        }
         Response::json($inv);
     }
 

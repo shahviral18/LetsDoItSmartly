@@ -470,6 +470,10 @@ $router->get('/api/profile', function (Request $req) {
             [':id' => $req->user['userId']]
         );
         if (!$u) Response::error('Not found', 404);
+        // Split name → first_name / last_name for frontend compatibility
+        $nameParts        = explode(' ', $u['name'] ?? '', 2);
+        $u['first_name']  = $nameParts[0];
+        $u['last_name']   = $nameParts[1] ?? '';
         // Load linked domains
         $domains = Database::query(
             'SELECT id, name FROM domains WHERE billing_entity_id = :be AND is_active = 1 ORDER BY name',
@@ -490,7 +494,17 @@ $router->patch('/api/profile', function (Request $req) {
     if ($role === 'domain_owner') {
         $fields = [];
         $params = [':id' => $req->user['userId']];
-        if (isset($b['name']))            { $fields[] = 'name = :name';           $params[':name']    = trim($b['name']); }
+        // Accept first_name/last_name from frontend and combine into the name column
+        if (isset($b['first_name']) || isset($b['last_name'])) {
+            $existing  = Database::queryOne('SELECT name FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            $parts     = explode(' ', $existing['name'] ?? '', 2);
+            $first     = isset($b['first_name']) ? trim($b['first_name']) : ($parts[0] ?? '');
+            $last      = isset($b['last_name'])  ? trim($b['last_name'])  : ($parts[1] ?? '');
+            $fields[]  = 'name = :name';
+            $params[':name'] = trim("$first $last");
+        } elseif (isset($b['name'])) {
+            $fields[] = 'name = :name'; $params[':name'] = trim($b['name']);
+        }
         if (isset($b['phone']))           { $fields[] = 'phone = :phone';         $params[':phone']   = trim($b['phone']); }
         if (isset($b['company_name']))    { $fields[] = 'company_name = :co';     $params[':co']      = trim($b['company_name']); }
         if (isset($b['gstin']))           { $fields[] = 'gstin = :gstin';         $params[':gstin']   = trim($b['gstin']); }

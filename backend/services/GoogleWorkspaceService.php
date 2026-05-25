@@ -25,7 +25,7 @@ class GoogleWorkspaceService
         'https://www.googleapis.com/auth/admin.reports.audit.readonly',
         'https://www.googleapis.com/auth/admin.reports.usage.readonly',
     ];
-    private const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+    private const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
 
     private static bool $loaded = false;
 
@@ -465,10 +465,9 @@ class GoogleWorkspaceService
                 $resp = $drive->drives->listDrives($opts);
                 foreach ($resp->getDrives() as $d) {
                     $result[] = [
-                        'id'        => $d->getId(),
-                        'name'      => $d->getName(),
-                        'createdAt' => $d->getCreatedTime(),
-                        'sizeMb'    => 0,
+                        'id'           => $d->getId(),
+                        'name'         => $d->getName(),
+                        'createdAt'    => $d->getCreatedTime(),
                         'membersCount' => 0,
                     ];
                 }
