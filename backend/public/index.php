@@ -525,6 +525,9 @@ $router->get('/api/profile', function (Request $req) {
     } else {
         $u = Database::queryOne('SELECT id, name, email, role FROM staff_users WHERE id = :id', [':id' => $req->user['userId']]);
         if (!$u) Response::error('Not found', 404);
+        $nameParts = explode(' ', trim($u['name'] ?? ''), 2);
+        $u['first_name'] = $nameParts[0] ?? '';
+        $u['last_name']  = $nameParts[1] ?? '';
         Response::json($u);
     }
 }, $auth);
@@ -554,8 +557,17 @@ $router->patch('/api/profile', function (Request $req) {
         Database::execute('UPDATE portal_users SET ' . implode(', ', $fields) . ' WHERE id = :id', $params);
         Response::json(['message' => 'Profile updated.']);
     } else {
-        if (!empty($b['name'])) {
-            Database::execute('UPDATE staff_users SET name = :n WHERE id = :id', [':n' => trim($b['name']), ':id' => $req->user['userId']]);
+        // Accept first_name/last_name or combined name
+        $newName = null;
+        if (isset($b['first_name']) || isset($b['last_name'])) {
+            $fn = trim($b['first_name'] ?? '');
+            $ln = trim($b['last_name'] ?? '');
+            $newName = trim("$fn $ln");
+        } elseif (!empty($b['name'])) {
+            $newName = trim($b['name']);
+        }
+        if ($newName) {
+            Database::execute('UPDATE staff_users SET name = :n WHERE id = :id', [':n' => $newName, ':id' => $req->user['userId']]);
         }
         Response::json(['message' => 'Profile updated.']);
     }
