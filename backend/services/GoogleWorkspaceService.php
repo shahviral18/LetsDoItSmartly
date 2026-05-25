@@ -460,7 +460,7 @@ class GoogleWorkspaceService
             $result = [];
             $pageToken = null;
             do {
-                $opts = ['pageSize' => 100, 'fields' => 'nextPageToken,drives(id,name,createdTime)'];
+                $opts = ['pageSize' => 100, 'useDomainAdminAccess' => true, 'fields' => 'nextPageToken,drives(id,name,createdTime)'];
                 if ($pageToken) $opts['pageToken'] = $pageToken;
                 $resp = $drive->drives->listDrives($opts);
                 foreach ($resp->getDrives() as $d) {
@@ -495,8 +495,9 @@ class GoogleWorkspaceService
             $drive = new Google_Service_Drive($client);
 
             $resp = $drive->permissions->listPermissions($driveId, [
-                'supportsAllDrives' => true,
-                'fields' => 'permissions(id,emailAddress,role,type)',
+                'supportsAllDrives'     => true,
+                'useDomainAdminAccess'  => true,
+                'fields'                => 'permissions(id,emailAddress,role,type)',
             ]);
             $members = [];
             foreach ($resp->getPermissions() as $p) {
