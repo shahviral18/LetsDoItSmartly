@@ -438,7 +438,7 @@ $router->patch('/api/security/alerts/:id/resolve', function (Request $req) {
 
 // ── Shared Drives ─────────────────────────────────────────────────────────────
 $router->get('/api/shared-drives', function (Request $req) {
-    // Ensure table exists (first visit before any sync)
+    // Ensure table exists and has latest columns
     Database::execute("CREATE TABLE IF NOT EXISTS shared_drives (
         id             VARCHAR(64)  NOT NULL PRIMARY KEY,
         name           VARCHAR(255) NOT NULL,
@@ -446,9 +446,11 @@ $router->get('/api/shared-drives', function (Request $req) {
         domain         VARCHAR(255) DEFAULT NULL,
         member_count   INT UNSIGNED NOT NULL DEFAULT 0,
         members_json   MEDIUMTEXT   DEFAULT NULL,
+        storage_mb     BIGINT UNSIGNED NOT NULL DEFAULT 0,
         created_at     DATETIME     DEFAULT NULL,
         last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", []);
+    try { Database::execute("ALTER TABLE shared_drives ADD COLUMN storage_mb BIGINT UNSIGNED NOT NULL DEFAULT 0", []); } catch (Throwable $e) { /* already exists */ }
 
     $role = $req->user['role'] ?? '';
     if ($role === 'domain_owner') {
