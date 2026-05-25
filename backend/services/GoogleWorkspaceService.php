@@ -625,6 +625,109 @@ class GoogleWorkspaceService
     }
 
     /**
+     * Sync members for all drives that have no members_json yet (or all drives if $forceAll=true).
+     * Designed to run as a nightly cron — safe to timeout mid-way, resumes next run.
+     */
+    public static function syncMembersToDb(bool $forceAll = false): array
+    {
+        set_time_limit(0);
+        ini_set('memory_limit', '512M');
+        $start = microtime(true);
+        $synced = 0; $errors = 0;
+
+        $where = $forceAll ? '1=1' : "(members_json IS NULL OR members_json = '[]' OR members_json = '')";
+        $drives = Database::query("SELECT id, name FROM shared_drives WHERE $where ORDER BY id");
+
+        self::updateSyncJob('shared_drives_members', 'running', count($drives), 0, 0);
+
+        foreach ($drives as $i => $drive) {
+            $members = []; $membersJson = '[]'; $memberCount = 0;
+            try {
+                $members     = self::getSharedDriveMembers($drive['id']);
+                $membersJson = json_encode($members);
+                $memberCount = count($members);
+            } catch (Throwable $e) {
+                Logger::error("[GWS] syncMembers failed for {$drive['id']}: " . $e->getMessage());
+                $errors++;
+                self::updateSyncJob('shared_drives_members', 'running', count($drives), $i + 1, $errors);
+                continue;
+            }
+
+            $creatorEmail = '';
+            foreach ($members as $m) {
+                if (($m['role'] ?? '') === 'organizer') { $creatorEmail = $m['email']; break; }
+            }
+            $domain = $creatorEmail && str_contains($creatorEmail, '@')
+                ? strtolower(explode('@', $creatorEmail)[1]) : '';
+
+            try {
+                Database::execute(
+                    "UPDATE shared_drives SET members_json=:mj, member_count=:mc, creator_email=:ce, domain=:dom WHERE id=:id",
+                    [':mj' => $membersJson, ':mc' => $memberCount, ':ce' => $creatorEmail, ':dom' => $domain, ':id' => $drive['id']]
+                );
+                $synced++;
+            } catch (Throwable $e) {
+                Logger::error("[GWS] syncMembers update failed for {$drive['id']}: " . $e->getMessage());
+                $errors++;
+            }
+            self::updateSyncJob('shared_drives_members', 'running', count($drives), $i + 1, $errors);
+        }
+
+        $duration = round(microtime(true) - $start, 1);
+        self::updateSyncJob('shared_drives_members', 'done', count($drives), $synced + $errors, $errors);
+        Logger::info("[GWS] syncMembersToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
+        return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
+    }
+
+    /**
+     * Sync storage_mb for all shared drives. One drives->get() call per drive.
+     * Designed to run as a nightly cron after syncMembersToDb.
+     */
+    public static function syncStorageToDb(): array
+    {
+        set_time_limit(0);
+        ini_set('memory_limit', '512M');
+        $start = microtime(true);
+        $synced = 0; $errors = 0;
+
+        self::boot();
+        $client = new Google_Client();
+        $client->setApplicationName('LetsDoItSmartly');
+        $client->setAuthConfig(GOOGLE_CREDENTIALS);
+        $client->setScopes(['https://www.googleapis.com/auth/drive']);
+        $client->setSubject(GOOGLE_ADMIN_EMAIL);
+        $driveService = new Google_Service_Drive($client);
+
+        $drives = Database::query('SELECT id FROM shared_drives ORDER BY id');
+        self::updateSyncJob('shared_drives_storage', 'running', count($drives), 0, 0);
+
+        foreach ($drives as $i => $drive) {
+            try {
+                $detail = $driveService->drives->get($drive['id'], [
+                    'useDomainAdminAccess' => true,
+                    'fields' => 'storageQuota',
+                ]);
+                $quota = $detail->getStorageQuota();
+                $storageMb = $quota ? (int)round((int)($quota->getUsageInDrive() ?? 0) / 1048576) : 0;
+                Database::execute(
+                    'UPDATE shared_drives SET storage_mb = :sm WHERE id = :id',
+                    [':sm' => $storageMb, ':id' => $drive['id']]
+                );
+                $synced++;
+            } catch (Throwable $e) {
+                Logger::error("[GWS] syncStorage failed for {$drive['id']}: " . $e->getMessage());
+                $errors++;
+            }
+            self::updateSyncJob('shared_drives_storage', 'running', count($drives), $i + 1, $errors);
+        }
+
+        $duration = round(microtime(true) - $start, 1);
+        self::updateSyncJob('shared_drives_storage', 'done', count($drives), $synced + $errors, $errors);
+        Logger::info("[GWS] syncStorageToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
+        return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
+    }
+
+    /**
      * Permanently delete a user from Google Admin.
      * ONLY called by the 30-day hard-delete cron — never by user-facing actions.
      * Guarded by isManaged() — will never touch WMD or non-LDIS users.

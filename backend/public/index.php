@@ -507,6 +507,35 @@ $router->get('/api/cron/sync-shared-drives', function (Request $req) {
     }
 });
 
+$router->get('/api/cron/sync-shared-drives-members', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    set_time_limit(0);
+    ini_set('memory_limit', '512M');
+    ignore_user_abort(true);
+    $forceAll = ($req->query['force'] ?? '') === '1';
+    try {
+        $stats = GoogleWorkspaceService::syncMembersToDb($forceAll);
+        Response::json($stats);
+    } catch (Throwable $e) {
+        Response::error('Members sync failed: ' . $e->getMessage(), 500);
+    }
+});
+
+$router->get('/api/cron/sync-shared-drives-storage', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    set_time_limit(0);
+    ini_set('memory_limit', '512M');
+    ignore_user_abort(true);
+    try {
+        $stats = GoogleWorkspaceService::syncStorageToDb();
+        Response::json($stats);
+    } catch (Throwable $e) {
+        Response::error('Storage sync failed: ' . $e->getMessage(), 500);
+    }
+});
+
 // ── Profile ───────────────────────────────────────────────────────────────────
 $router->get('/api/profile', function (Request $req) {
     $role = $req->user['role'];
