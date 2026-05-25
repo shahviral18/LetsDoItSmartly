@@ -450,7 +450,20 @@ $router->get('/api/shared-drives', function (Request $req) {
         last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", []);
 
-    $drives = Database::query('SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives ORDER BY name');
+    $role = $req->user['role'] ?? '';
+    if ($role === 'domain_owner') {
+        // Scope to domains belonging to this user's billing entity
+        $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+        $beId = $pu['billing_entity_id'] ?? null;
+        if (!$beId) { Response::json(['data' => [], 'last_synced_at' => null]); return; }
+        $domainRows = Database::query('SELECT name FROM domains WHERE billing_entity_id = :be AND is_active = 1', [':be' => $beId]);
+        $domainNames = array_column($domainRows, 'name');
+        if (empty($domainNames)) { Response::json(['data' => [], 'last_synced_at' => null]); return; }
+        $placeholders = implode(',', array_fill(0, count($domainNames), '?'));
+        $drives = Database::query("SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives WHERE domain IN ($placeholders) ORDER BY name", $domainNames);
+    } else {
+        $drives = Database::query('SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives ORDER BY name');
+    }
     $lastSynced = Database::queryOne('SELECT MAX(last_synced_at) AS ts FROM shared_drives');
     Response::json(['data' => $drives, 'last_synced_at' => $lastSynced['ts'] ?? null]);
 }, $auth);
