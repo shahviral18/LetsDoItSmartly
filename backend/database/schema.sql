@@ -443,6 +443,7 @@ CREATE TABLE IF NOT EXISTS shared_drives (
   domain         VARCHAR(255) DEFAULT NULL,
   member_count   INT UNSIGNED NOT NULL DEFAULT 0,
   members_json   MEDIUMTEXT   DEFAULT NULL,
+  storage_mb     BIGINT UNSIGNED NOT NULL DEFAULT 0,
   created_at     DATETIME     DEFAULT NULL,
   last_synced_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_sd_domain (domain),

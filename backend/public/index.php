@@ -460,9 +460,9 @@ $router->get('/api/shared-drives', function (Request $req) {
         $domainNames = array_column($domainRows, 'name');
         if (empty($domainNames)) { Response::json(['data' => [], 'last_synced_at' => null]); return; }
         $placeholders = implode(',', array_fill(0, count($domainNames), '?'));
-        $drives = Database::query("SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives WHERE domain IN ($placeholders) ORDER BY name", $domainNames);
+        $drives = Database::query("SELECT id, name, creator_email, domain, member_count, storage_mb, created_at, last_synced_at FROM shared_drives WHERE domain IN ($placeholders) ORDER BY name", $domainNames);
     } else {
-        $drives = Database::query('SELECT id, name, creator_email, domain, member_count, created_at, last_synced_at FROM shared_drives ORDER BY name');
+        $drives = Database::query('SELECT id, name, creator_email, domain, member_count, storage_mb, created_at, last_synced_at FROM shared_drives ORDER BY name');
     }
     $lastSynced = Database::queryOne('SELECT MAX(last_synced_at) AS ts FROM shared_drives');
     Response::json(['data' => $drives, 'last_synced_at' => $lastSynced['ts'] ?? null]);

@@ -9,6 +9,7 @@ interface SharedDrive {
   creator_email: string;
   domain: string;
   member_count: number;
+  storage_mb: number;
   created_at: string;
   last_synced_at: string;
 }
@@ -174,6 +175,13 @@ export function SharedDrivesPage() {
   const fmtDate = (iso?: string | null) =>
     iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
+  const fmtStorage = (mb: number) => {
+    if (!mb) return '—';
+    if (mb >= 1048576) return `${(mb / 1048576).toFixed(1)} TB`;
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${mb} MB`;
+  };
+
   const fmtDateTime = (iso?: string | null) =>
     iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
 
@@ -254,7 +262,7 @@ export function SharedDrivesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
-                  {['Sr.No', 'Name', 'Creator', 'Domain', 'Created Date', 'Members'].map(h => (
+                  {['Sr.No', 'Name', 'Creator', 'Domain', 'Created Date', 'Storage', 'Members'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -282,6 +290,7 @@ export function SharedDrivesPage() {
                         : <span className="text-slate-400">—</span>}
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-xs">{fmtDate(drive.created_at)}</td>
+                    <td className="px-4 py-3 text-slate-600 text-xs font-medium">{fmtStorage(drive.storage_mb)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5 text-slate-600">
                         <Users size={13} className="text-slate-400" />
@@ -308,6 +317,12 @@ function MembersDrawer({ drive, members, loading, onClose }: {
 }) {
   const fmtDate = (iso?: string | null) =>
     iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : null;
+  const fmtStorage = (mb: number) => {
+    if (!mb) return null;
+    if (mb >= 1048576) return `${(mb / 1048576).toFixed(1)} TB`;
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${mb} MB`;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -329,6 +344,7 @@ function MembersDrawer({ drive, members, loading, onClose }: {
             <p className="text-xs text-slate-500">Creator: <span className="font-medium text-slate-700">{drive.creator_email || '—'}</span></p>
             {drive.domain && <p className="text-xs text-slate-500">Domain: <span className="font-medium text-blue-600">{drive.domain}</span></p>}
             {fmtDate(drive.created_at) && <p className="text-xs text-slate-500">Created: <span className="font-medium text-slate-700">{fmtDate(drive.created_at)}</span></p>}
+            {fmtStorage(drive.storage_mb) && <p className="text-xs text-slate-500">Storage used: <span className="font-medium text-slate-700">{fmtStorage(drive.storage_mb)}</span></p>}
           </div>
 
           {loading ? (
