@@ -843,7 +843,7 @@ class GoogleWorkspaceService
 
     public static function removeAlias(string $email, string $alias): bool
     {
-        if (!self::isManaged($email)) return false;
+        if (!self::isManaged($email)) throw new \RuntimeException("$email is not a managed LDIS domain");
         try {
             $service = self::getService();
             $service->users_aliases->delete($email, $alias);

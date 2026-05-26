@@ -649,7 +649,15 @@ class WorkspaceUserController
         if (!$wu) Response::error('Not found.', 404);
         $this->guardBillingEntity($req, $wu);
 
-        GoogleWorkspaceService::removeAlias($wu['email'], $alias);
+        try {
+            GoogleWorkspaceService::removeAlias($wu['email'], $alias);
+        } catch (Throwable $e) {
+            $msg = $e->getMessage();
+            if (str_contains($msg, '404') || str_contains($msg, 'Resource Not Found')) {
+                Response::error('Alias not found.', 404);
+            }
+            Response::error('Failed to remove alias: ' . $msg, 400);
+        }
         AuditService::log('ALIAS_REMOVED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "alias: $alias", $req->ip);
         Response::json(['message' => "Alias $alias removed."]);
     }

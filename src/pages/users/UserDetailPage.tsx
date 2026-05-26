@@ -176,7 +176,10 @@ export function UserDetailPage() {
   const [aliasesLoading, setAliasesLoading] = useState(false);
   const [aliasesLoaded, setAliasesLoaded] = useState(false);
   const [aliasesErr, setAliasesErr] = useState('');
-  const [newAlias, setNewAlias] = useState('');
+  const [newAliasUsername, setNewAliasUsername] = useState('');
+  const [newAliasDomain, setNewAliasDomain] = useState('');
+  const [availableDomains, setAvailableDomains] = useState<string[]>([]);
+  const [domainsLoaded, setDomainsLoaded] = useState(false);
   const [addingAlias, setAddingAlias] = useState(false);
   const [aliasPanelOpen, setAliasPanelOpen] = useState(false);
 
@@ -236,14 +239,26 @@ export function UserDetailPage() {
     return () => { if (msgTimer.current) clearTimeout(msgTimer.current); };
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load aliases when panel opens
+  // Load aliases + available domains when panel opens
   useEffect(() => {
-    if (!aliasPanelOpen || aliasesLoaded) return;
-    setAliasesLoading(true); setAliasesErr('');
-    api.patch<{ aliases: { alias: string }[] }>(`/workspace-users/${id}/action`, { action: 'get-aliases' })
-      .then(res => { setAliases(res.aliases.map(a => a.alias)); setAliasesLoaded(true); })
-      .catch(e => setAliasesErr(e instanceof Error ? e.message : 'Failed to load aliases'))
-      .finally(() => setAliasesLoading(false));
+    if (!aliasPanelOpen) return;
+    if (!aliasesLoaded) {
+      setAliasesLoading(true); setAliasesErr('');
+      api.patch<{ aliases: { alias: string }[] }>(`/workspace-users/${id}/action`, { action: 'get-aliases' })
+        .then(res => { setAliases(res.aliases.map(a => a.alias)); setAliasesLoaded(true); })
+        .catch(e => setAliasesErr(e instanceof Error ? e.message : 'Failed to load aliases'))
+        .finally(() => setAliasesLoading(false));
+    }
+    if (!domainsLoaded) {
+      api.get<{ data: { name: string }[] }>('/domains')
+        .then(res => {
+          const names = (res.data ?? []).map((d: { name: string }) => d.name).sort();
+          setAvailableDomains(names);
+          if (names.length > 0) setNewAliasDomain(names[0]);
+          setDomainsLoaded(true);
+        })
+        .catch(() => {});
+    }
   }, [aliasPanelOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load forwarding when panel opens
@@ -349,12 +364,15 @@ export function UserDetailPage() {
 
   // ── Alias actions ────────────────────────────────────────────────────────────
   async function handleAddAlias() {
-    if (!newAlias.trim()) return;
+    const username = newAliasUsername.trim().toLowerCase();
+    const domain   = newAliasDomain.trim().toLowerCase();
+    if (!username || !domain) return;
+    const alias = `${username}@${domain}`;
     setAddingAlias(true); setAliasesErr('');
     try {
-      await api.patch(`/workspace-users/${id}/action`, { action: 'add-alias', alias: newAlias.trim() });
-      setAliases(a => [...a, newAlias.trim().toLowerCase()]);
-      setNewAlias('');
+      await api.patch(`/workspace-users/${id}/action`, { action: 'add-alias', alias });
+      setAliases(a => [...a, alias]);
+      setNewAliasUsername('');
     } catch (e: unknown) {
       setAliasesErr(e instanceof Error ? e.message : 'Failed to add alias');
     } finally {
@@ -611,19 +629,27 @@ export function UserDetailPage() {
                         ))}
                       </div>
                     )}
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex gap-1.5 mt-2 items-center flex-wrap">
                       <input
-                        type="email"
-                        value={newAlias}
-                        onChange={e => setNewAlias(e.target.value)}
-                        placeholder="new.alias@domain.com"
-                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-[#1A7DC4] focus:ring-2 focus:ring-blue-100"
+                        type="text"
+                        value={newAliasUsername}
+                        onChange={e => setNewAliasUsername(e.target.value.replace(/[@\s]/g, ''))}
+                        placeholder="username"
+                        className="w-32 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-[#1A7DC4] focus:ring-2 focus:ring-blue-100"
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddAlias(); } }}
                       />
+                      <span className="text-slate-400 text-sm font-medium">@</span>
+                      <select
+                        value={newAliasDomain}
+                        onChange={e => setNewAliasDomain(e.target.value)}
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-[#1A7DC4] focus:ring-2 focus:ring-blue-100 text-slate-800 bg-white"
+                      >
+                        {availableDomains.map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
                       <button
                         onClick={handleAddAlias}
-                        disabled={addingAlias || !newAlias.trim()}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#1A7DC4] text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors"
+                        disabled={addingAlias || !newAliasUsername.trim() || !newAliasDomain}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#1A7DC4] text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors shrink-0"
                       >
                         {addingAlias ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Add
                       </button>
