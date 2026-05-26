@@ -474,6 +474,7 @@ $router->get('/api/shared-drives', function (Request $req) {
 }, $auth);
 
 
+
 $router->get('/api/shared-drives/sync-status', function (Request $req) {
     GoogleWorkspaceService::ensureSyncJobTable();
     $row = Database::queryOne("SELECT * FROM sync_jobs WHERE job = 'shared_drives'");
@@ -526,19 +527,8 @@ $router->get('/api/scheduled/drives-members', function (Request $req) {
     }
 });
 
-$router->get('/api/scheduled/drives-storage', function (Request $req) {
-    $token = $req->query['token'] ?? '';
-    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
-    set_time_limit(0);
-    ini_set('memory_limit', '512M');
-    ignore_user_abort(true);
-    try {
-        $stats = GoogleWorkspaceService::syncStorageToDb();
-        Response::json($stats);
-    } catch (Throwable $e) {
-        Response::error('Storage sync failed: ' . $e->getMessage(), 500);
-    }
-});
+// Storage sync removed — Google Drive API does not expose shared drive storage usage.
+// The UI shows '—' when storage_mb = 0, which is the correct display.
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 $router->get('/api/profile', function (Request $req) {
