@@ -473,6 +473,7 @@ $router->get('/api/shared-drives', function (Request $req) {
     Response::json(['data' => $drives, 'last_synced_at' => $lastSynced['ts'] ?? null]);
 }, $auth);
 
+
 $router->get('/api/shared-drives/sync-status', function (Request $req) {
     GoogleWorkspaceService::ensureSyncJobTable();
     $row = Database::queryOne("SELECT * FROM sync_jobs WHERE job = 'shared_drives'");

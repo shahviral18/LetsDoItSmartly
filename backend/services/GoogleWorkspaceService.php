@@ -623,9 +623,8 @@ class GoogleWorkspaceService
      * Sync members for all drives that have no members_json yet (or all drives if $forceAll=true).
      * Designed to run as a nightly cron — safe to timeout mid-way, resumes next run.
      */
-    public static function syncMembersToDb(bool $forceAll = false): array
+    public static function syncMembersToDb(bool $forceAll = false, int $maxSeconds = 50): array
     {
-        set_time_limit(0);
         ini_set('memory_limit', '512M');
         $start = microtime(true);
         $synced = 0; $errors = 0;
@@ -633,9 +632,15 @@ class GoogleWorkspaceService
         $where = $forceAll ? '1=1' : "(members_json IS NULL OR members_json = '[]' OR members_json = '')";
         $drives = Database::query("SELECT id, name FROM shared_drives WHERE $where ORDER BY id");
 
-        self::updateSyncJob('shared_drives_members', 'running', count($drives), 0, 0);
+        $total = count($drives);
+        self::updateSyncJob('shared_drives_members', 'running', $total, 0, 0);
 
         foreach ($drives as $i => $drive) {
+            // Stop before Apache kills us — leave time for final DB write
+            if ((microtime(true) - $start) >= $maxSeconds) {
+                self::updateSyncJob('shared_drives_members', 'partial', $total, $synced + $errors, $errors);
+                return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => round(microtime(true) - $start, 1), 'remaining' => $total - $i];
+            }
             $members = []; $membersJson = '[]'; $memberCount = 0;
             try {
                 $members     = self::getSharedDriveMembers($drive['id']);
@@ -678,25 +683,23 @@ class GoogleWorkspaceService
      * Sync storage_mb for all shared drives. One drives->get() call per drive.
      * Designed to run as a nightly cron after syncMembersToDb.
      */
-    public static function syncStorageToDb(): array
+    public static function syncStorageToDb(int $maxSeconds = 50): array
     {
-        set_time_limit(0);
         ini_set('memory_limit', '512M');
         $start = microtime(true);
         $synced = 0; $errors = 0;
 
-        self::boot();
-        $client = new Google_Client();
-        $client->setApplicationName('LetsDoItSmartly');
-        $client->setAuthConfig(GOOGLE_CREDENTIALS);
-        $client->setScopes(['https://www.googleapis.com/auth/drive']);
-        $client->setSubject(GOOGLE_ADMIN_EMAIL);
-        $driveService = new Google_Service_Drive($client);
+        $driveService = self::getAdminDriveService();
 
-        $drives = Database::query('SELECT id FROM shared_drives ORDER BY id');
-        self::updateSyncJob('shared_drives_storage', 'running', count($drives), 0, 0);
+        $drives = Database::query('SELECT id FROM shared_drives WHERE storage_mb = 0 ORDER BY id');
+        $total = count($drives);
+        self::updateSyncJob('shared_drives_storage', 'running', $total, 0, 0);
 
         foreach ($drives as $i => $drive) {
+            if ((microtime(true) - $start) >= $maxSeconds) {
+                self::updateSyncJob('shared_drives_storage', 'partial', $total, $synced + $errors, $errors);
+                return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => round(microtime(true) - $start, 1), 'remaining' => $total - $i];
+            }
             try {
                 $detail = $driveService->drives->get($drive['id'], [
                     'useDomainAdminAccess' => true,
@@ -713,11 +716,11 @@ class GoogleWorkspaceService
                 Logger::error("[GWS] syncStorage failed for {$drive['id']}: " . $e->getMessage());
                 $errors++;
             }
-            self::updateSyncJob('shared_drives_storage', 'running', count($drives), $i + 1, $errors);
+            self::updateSyncJob('shared_drives_storage', 'running', $total, $i + 1, $errors);
         }
 
         $duration = round(microtime(true) - $start, 1);
-        self::updateSyncJob('shared_drives_storage', 'done', count($drives), $synced + $errors, $errors);
+        self::updateSyncJob('shared_drives_storage', 'done', $total, $synced + $errors, $errors);
         Logger::info("[GWS] syncStorageToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
         return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
     }
