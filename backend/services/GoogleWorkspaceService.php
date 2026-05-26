@@ -748,12 +748,29 @@ class GoogleWorkspaceService
                 return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => round(microtime(true) - $start, 1), 'remaining' => $total - $i];
             }
             try {
-                $detail = $driveService->drives->get($drive['id'], [
-                    'useDomainAdminAccess' => true,
-                    'fields' => 'storageQuota',
-                ]);
-                $quota = $detail->getStorageQuota();
-                $storageMb = $quota ? (int)round((int)($quota->getUsageInDrive() ?? 0) / 1048576) : 0;
+                // Fetch drive details — storageQuota not available via Drives API for shared drives
+                // Use files.list to sum file sizes within the drive
+                $driveService = self::getAdminDriveService();
+                $totalBytes = 0;
+                $pageToken = null;
+                do {
+                    $params = [
+                        'driveId'                  => $drive['id'],
+                        'includeItemsFromAllDrives' => true,
+                        'supportsAllDrives'         => true,
+                        'corpora'                  => 'drive',
+                        'fields'                   => 'nextPageToken,files(size)',
+                        'q'                        => 'trashed = false',
+                        'pageSize'                 => 1000,
+                    ];
+                    if ($pageToken) $params['pageToken'] = $pageToken;
+                    $result = $driveService->files->listFiles($params);
+                    foreach ($result->getFiles() as $file) {
+                        $totalBytes += (int)($file->getSize() ?? 0);
+                    }
+                    $pageToken = $result->getNextPageToken();
+                } while ($pageToken);
+                $storageMb = (int)round($totalBytes / 1048576);
                 Database::execute(
                     'UPDATE shared_drives SET storage_mb = :sm WHERE id = :id',
                     [':sm' => $storageMb, ':id' => $drive['id']]

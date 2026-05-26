@@ -237,12 +237,12 @@ $router->get  ('/api/bcc-requests/:id',    [BccController::class, 'get'],       
 $router->patch('/api/bcc-requests/:id',    [BccController::class, 'updateStatus'], AuthMiddleware::staffOnly(['super_admin','admin','support_admin']));
 
 // ── Cron HTTP triggers (token-protected, no auth middleware) ─────────────────
-$router->get('/api/cron/run-renewals', function (Request $req) {
+$router->get('/api/scheduled/renewals', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
     require BASE_PATH . '/cron/renewal-reminders.php';
 });
-$router->get('/api/cron/run-hard-delete', function (Request $req) {
+$router->get('/api/scheduled/hard-delete', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
     require BASE_PATH . '/cron/hard-delete.php';
@@ -496,7 +496,7 @@ $router->post('/api/shared-drives/sync', function (Request $req) {
     Response::json($stats);
 }, $superAdmin);
 
-$router->get('/api/cron/sync-shared-drives', function (Request $req) {
+$router->get('/api/scheduled/drives-sync', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
     set_time_limit(0);
@@ -511,7 +511,7 @@ $router->get('/api/cron/sync-shared-drives', function (Request $req) {
     }
 });
 
-$router->get('/api/cron/sync-shared-drives-members', function (Request $req) {
+$router->get('/api/scheduled/drives-members', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
     set_time_limit(0);
@@ -526,7 +526,7 @@ $router->get('/api/cron/sync-shared-drives-members', function (Request $req) {
     }
 });
 
-$router->get('/api/cron/sync-shared-drives-storage', function (Request $req) {
+$router->get('/api/scheduled/drives-storage', function (Request $req) {
     $token = $req->query['token'] ?? '';
     if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
     set_time_limit(0);
