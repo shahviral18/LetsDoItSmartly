@@ -20,8 +20,6 @@ class GoogleWorkspaceService
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.orgunit',
         'https://www.googleapis.com/auth/admin.directory.user.security',
-        'https://www.googleapis.com/auth/gmail.settings.sharing',
-        'https://mail.google.com/',
     ];
     private const REPORTS_SCOPES = [
         'https://www.googleapis.com/auth/admin.reports.audit.readonly',
@@ -814,7 +812,11 @@ class GoogleWorkspaceService
             $result  = $service->users_aliases->listUsersAliases($email);
             $aliases = [];
             foreach ($result->getAliases() ?? [] as $a) {
-                $aliases[] = ['alias' => $a->getAlias(), 'primary_email' => $a->getPrimaryEmail()];
+                if (is_array($a)) {
+                    $aliases[] = ['alias' => $a['alias'] ?? '', 'primary_email' => $a['primaryEmail'] ?? ''];
+                } else {
+                    $aliases[] = ['alias' => $a->getAlias(), 'primary_email' => $a->getPrimaryEmail()];
+                }
             }
             return $aliases;
         } catch (Throwable $e) {
