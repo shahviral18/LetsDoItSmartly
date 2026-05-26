@@ -779,5 +779,12 @@ $router->patch('/api/admin/coupons/:id', function (Request $req) {
     Response::error('Nothing to update', 422);
 }, $superAdmin);
 
+// ── DB Migrations (token-protected, one-time run) ────────────────────────────
+$router->get('/api/scheduled/migrate-v3', function (Request $req) {
+    $token = $req->query['token'] ?? '';
+    if ($token !== INTERNAL_CRON_TOKEN) Response::error('Forbidden', 403);
+    require BASE_PATH . '/database/migrate_v3.php';
+});
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 $router->dispatch();

@@ -20,6 +20,8 @@ class GoogleWorkspaceService
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.orgunit',
         'https://www.googleapis.com/auth/admin.directory.user.security',
+        'https://www.googleapis.com/auth/gmail.settings.sharing',
+        'https://mail.google.com/',
     ];
     private const REPORTS_SCOPES = [
         'https://www.googleapis.com/auth/admin.reports.audit.readonly',
@@ -787,6 +789,192 @@ class GoogleWorkspaceService
         self::updateSyncJob('shared_drives_storage', 'done', $total, $synced + $errors, $errors);
         Logger::info("[GWS] syncStorageToDb complete — synced: $synced, errors: $errors, duration: {$duration}s");
         return ['synced' => $synced, 'errors' => $errors, 'duration_sec' => $duration];
+    }
+
+    private static function getGmailService(string $userEmail): object
+    {
+        self::boot();
+        $client = new Google_Client();
+        $client->setApplicationName('LetsDoItSmartly');
+        $client->setAuthConfig(GOOGLE_CREDENTIALS);
+        $client->setScopes([
+            'https://www.googleapis.com/auth/gmail.settings.sharing',
+            'https://mail.google.com/',
+        ]);
+        $client->setSubject($userEmail);
+        return new Google_Service_Gmail($client);
+    }
+
+    // ── Alias Management ──────────────────────────────────────────────────────
+
+    public static function listAliases(string $email): array
+    {
+        try {
+            $service = self::getService();
+            $result  = $service->users_aliases->listUsersAliases($email);
+            $aliases = [];
+            foreach ($result->getAliases() ?? [] as $a) {
+                $aliases[] = ['alias' => $a->getAlias(), 'primary_email' => $a->getPrimaryEmail()];
+            }
+            return $aliases;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] listAliases FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function addAlias(string $email, string $alias): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $service   = self::getService();
+            $aliasObj  = new Google_Service_Directory_Alias();
+            $aliasObj->setAlias($alias);
+            $service->users_aliases->insert($email, $aliasObj);
+            Logger::info("[GWS] addAlias OK → $email ← $alias");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] addAlias FAILED → $email ← $alias: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function removeAlias(string $email, string $alias): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $service = self::getService();
+            $service->users_aliases->delete($email, $alias);
+            Logger::info("[GWS] removeAlias OK → $email ← $alias");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] removeAlias FAILED → $email ← $alias: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    // ── Email Forwarding ──────────────────────────────────────────────────────
+
+    public static function getForwarding(string $email): array
+    {
+        try {
+            $gmail   = self::getGmailService($email);
+            $result  = $gmail->users_settings->getAutoForwarding($email);
+            return [
+                'enabled'      => (bool) $result->getEnabled(),
+                'forward_to'   => (string) ($result->getEmailAddress() ?? ''),
+                'disposition'  => (string) ($result->getDisposition() ?? 'leaveInInbox'),
+            ];
+        } catch (Throwable $e) {
+            Logger::error("[GWS] getForwarding FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function setForwarding(string $email, bool $enabled, string $forwardTo = '', string $disposition = 'leaveInInbox'): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $gmail   = self::getGmailService($email);
+            $setting = new Google_Service_Gmail_AutoForwarding();
+            $setting->setEnabled($enabled);
+            if ($enabled && $forwardTo) {
+                $setting->setEmailAddress($forwardTo);
+                $setting->setDisposition($disposition); // leaveInInbox | archive | trash | markRead
+            }
+            $gmail->users_settings->updateAutoForwarding($email, $setting);
+            Logger::info("[GWS] setForwarding OK → $email enabled=$enabled forwardTo=$forwardTo");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] setForwarding FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    // ── 2SV Backup Codes ──────────────────────────────────────────────────────
+
+    public static function listBackupCodes(string $email): array
+    {
+        try {
+            $service = self::getService();
+            $result  = $service->verificationCodes->listVerificationCodes($email);
+            $codes   = [];
+            foreach ($result->getItems() ?? [] as $item) {
+                $codes[] = $item->getVerificationCode();
+            }
+            return $codes;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] listBackupCodes FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function generateBackupCodes(string $email): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $service = self::getService();
+            $service->verificationCodes->generate($email);
+            Logger::info("[GWS] generateBackupCodes OK → $email");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] generateBackupCodes FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function invalidateBackupCodes(string $email): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $service = self::getService();
+            $service->verificationCodes->invalidate($email);
+            Logger::info("[GWS] invalidateBackupCodes OK → $email");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] invalidateBackupCodes FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    // ── OOO / Vacation Responder ──────────────────────────────────────────────
+
+    public static function getVacation(string $email): array
+    {
+        try {
+            $gmail  = self::getGmailService($email);
+            $result = $gmail->users_settings->getVacation($email);
+            return [
+                'enabled'          => (bool) $result->getEnableAutoReply(),
+                'subject'          => (string) ($result->getResponseSubject() ?? ''),
+                'body'             => (string) ($result->getResponseBodyPlainText() ?? ''),
+                'start_time_epoch' => $result->getStartTime() ? (int)($result->getStartTime() / 1000) : null,
+                'end_time_epoch'   => $result->getEndTime()   ? (int)($result->getEndTime()   / 1000) : null,
+            ];
+        } catch (Throwable $e) {
+            Logger::error("[GWS] getVacation FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public static function setVacation(string $email, array $data): bool
+    {
+        if (!self::isManaged($email)) return false;
+        try {
+            $gmail   = self::getGmailService($email);
+            $setting = new Google_Service_Gmail_VacationSettings();
+            $setting->setEnableAutoReply((bool) ($data['enabled'] ?? false));
+            if (!empty($data['subject'])) $setting->setResponseSubject($data['subject']);
+            if (!empty($data['body']))    $setting->setResponseBodyPlainText($data['body']);
+            if (!empty($data['start_time_epoch'])) $setting->setStartTime((int)$data['start_time_epoch'] * 1000);
+            if (!empty($data['end_time_epoch']))   $setting->setEndTime((int)$data['end_time_epoch'] * 1000);
+            $gmail->users_settings->updateVacation($email, $setting);
+            Logger::info("[GWS] setVacation OK → $email enabled=" . ($data['enabled'] ? 'true' : 'false'));
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] setVacation FAILED → $email: " . $e->getMessage());
+            throw $e;
+        }
     }
 
     /**

@@ -248,21 +248,136 @@ class WorkspaceUserController
     }
 
     // ── Action dispatcher (avoids ModSecurity blocking POST to sub-paths) ────
-    // PATCH /api/workspace-users/:id/action  body: { "action": "suspend"|"unsuspend"|"reset-password"|"upgrade-plan"|"archive"|"archive-confirm"|"restore", ...params }
+    // PATCH /api/workspace-users/:id/action  body: { "action": "...", ...params }
 
     public function dispatchAction(Request $req): void
     {
         $action = (string) ($req->body['action'] ?? '');
         match ($action) {
-            'suspend'          => $this->suspend($req),
-            'unsuspend'        => $this->unsuspend($req),
-            'reset-password'   => $this->resetPassword($req),
-            'upgrade-plan'     => $this->upgradePlan($req),
-            'archive'          => $this->requestDelete($req),
-            'archive-confirm'  => $this->confirmDelete($req),
-            'restore'          => $this->recover($req),
-            default            => Response::error('Unknown action: ' . htmlspecialchars($action), 400),
+            'suspend'                        => $this->requestSuspend($req),
+            'suspend-confirm'                => $this->confirmSuspend($req),
+            'unsuspend'                      => $this->unsuspend($req),
+            'reset-password'                 => $this->resetPassword($req),
+            'upgrade-plan'                   => $this->upgradePlan($req),
+            'archive'                        => $this->requestDelete($req),
+            'archive-confirm'                => $this->confirmDelete($req),
+            'restore'                        => $this->recover($req),
+            'get-aliases'                    => $this->getAliases($req),
+            'add-alias'                      => $this->addAlias($req),
+            'remove-alias'                   => $this->removeAlias($req),
+            'get-forwarding'                 => $this->getForwarding($req),
+            'set-forwarding'                 => $this->setForwarding($req),
+            'get-backup-codes'               => $this->getBackupCodes($req),
+            'generate-backup-codes'          => $this->requestGenerateBackupCodes($req),
+            'generate-backup-codes-confirm'  => $this->confirmGenerateBackupCodes($req),
+            'invalidate-backup-codes'        => $this->requestInvalidateBackupCodes($req),
+            'invalidate-backup-codes-confirm'=> $this->confirmInvalidateBackupCodes($req),
+            'get-vacation'                   => $this->getVacation($req),
+            'set-vacation'                   => $this->setVacation($req),
+            default                          => Response::error('Unknown action: ' . htmlspecialchars($action), 400),
         };
+    }
+
+    // ── Shared OTP helpers ────────────────────────────────────────────────────
+
+    private function guardBillingEntity(Request $req, array $wu): void
+    {
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)($pu['billing_entity_id'] ?? 0) !== (int)$wu['billing_entity_id']) {
+                Response::error('Forbidden.', 403);
+            }
+        }
+    }
+
+    private function sendActionOtp(Request $req, array $wu, string $pendingAction, string $description): void
+    {
+        $otp     = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expires = date('Y-m-d H:i:s', strtotime('+10 minutes'));
+
+        Database::execute(
+            'UPDATE workspace_users SET action_otp = :otp, action_otp_expires_at = :exp, pending_action = :pa WHERE id = :id',
+            [':otp' => $otp, ':exp' => $expires, ':pa' => $pendingAction, ':id' => $wu['id']]
+        );
+
+        $recipients = [$wu['contact_email']];
+        if (!empty($wu['deletion_approver_emails'])) {
+            foreach (explode(',', $wu['deletion_approver_emails']) as $e) {
+                $e = trim($e);
+                if ($e && filter_var($e, FILTER_VALIDATE_EMAIL)) $recipients[] = $e;
+            }
+        }
+        $recipients = array_unique($recipients);
+
+        // TODO: send via SMTP when wired
+        Logger::info("[OTP] $description for {$wu['email']} → $otp (expires $expires) | Recipients: " . implode(', ', $recipients));
+
+        Response::json([
+            'message'     => 'OTP sent to ' . implode(', ', $recipients) . '. Valid for 10 minutes.',
+            'otp_sent_to' => $recipients,
+            '_dev_otp'    => $otp,
+        ]);
+    }
+
+    private function verifyActionOtp(int $id, string $expectedAction, string $otp): array
+    {
+        $wu = Database::queryOne(
+            'SELECT wu.*, be.contact_email, be.deletion_approver_emails
+             FROM workspace_users wu JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+        if (!$wu['action_otp'])                                            Response::error('No pending OTP request.', 400);
+        if ($wu['pending_action'] !== $expectedAction)                     Response::error('OTP was issued for a different action.', 400);
+        if (strtotime($wu['action_otp_expires_at']) < time())              Response::error('OTP has expired. Please request again.', 400);
+        if ($wu['action_otp'] !== $otp)                                    Response::error('Invalid OTP.', 400);
+        return $wu;
+    }
+
+    private function clearActionOtp(int $id): void
+    {
+        Database::execute(
+            'UPDATE workspace_users SET action_otp = NULL, action_otp_expires_at = NULL, pending_action = NULL WHERE id = :id',
+            [':id' => $id]
+        );
+    }
+
+    // ── Suspend with OTP ──────────────────────────────────────────────────────
+
+    public function requestSuspend(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne(
+            'SELECT wu.*, be.contact_email, be.deletion_approver_emails
+             FROM workspace_users wu JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+        if ($wu['status'] === 'suspended') Response::error('User is already suspended.', 400);
+        if (in_array($wu['status'], ['deleted_pending', 'deleted'], true)) Response::error('Cannot suspend a deleted user.', 400);
+
+        $this->sendActionOtp($req, $wu, 'suspend', 'Suspend OTP');
+        AuditService::log('SUSPEND_OTP_SENT', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], '', $req->ip);
+    }
+
+    public function confirmSuspend(Request $req): void
+    {
+        $id  = (int) $req->param('id');
+        $otp = trim((string) ($req->body['otp'] ?? ''));
+        if (!$otp) Response::error('OTP is required.', 422);
+
+        $wu = $this->verifyActionOtp($id, 'suspend', $otp);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::suspendUser($wu['email']);
+        Database::execute("UPDATE workspace_users SET status = 'suspended' WHERE id = :id", [':id' => $id]);
+        $this->clearActionOtp($id);
+
+        AuditService::log('USER_SUSPENDED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'OTP verified', $req->ip);
+        Response::json(['message' => 'User suspended.']);
     }
 
     // ── Delete Flow ───────────────────────────────────────────────────────────
@@ -494,5 +609,195 @@ class WorkspaceUserController
         AuditService::log('USER_RECOVERED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "Recovered from deleted_pending.", $req->ip);
 
         Response::json(['message' => 'User recovered successfully. Account is active again.']);
+    }
+
+    // ── Alias Management ──────────────────────────────────────────────────────
+
+    public function getAliases(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $aliases = GoogleWorkspaceService::listAliases($wu['email']);
+        Response::json(['aliases' => $aliases]);
+    }
+
+    public function addAlias(Request $req): void
+    {
+        $id    = (int) $req->param('id');
+        $alias = strtolower(trim((string) ($req->body['alias'] ?? '')));
+        if (!$alias || !filter_var($alias, FILTER_VALIDATE_EMAIL)) Response::error('Valid alias email required.', 400);
+
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::addAlias($wu['email'], $alias);
+        AuditService::log('ALIAS_ADDED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "alias: $alias", $req->ip);
+        Response::json(['message' => "Alias $alias added."]);
+    }
+
+    public function removeAlias(Request $req): void
+    {
+        $id    = (int) $req->param('id');
+        $alias = strtolower(trim((string) ($req->body['alias'] ?? '')));
+        if (!$alias) Response::error('Alias required.', 400);
+
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::removeAlias($wu['email'], $alias);
+        AuditService::log('ALIAS_REMOVED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "alias: $alias", $req->ip);
+        Response::json(['message' => "Alias $alias removed."]);
+    }
+
+    // ── Email Forwarding ──────────────────────────────────────────────────────
+
+    public function getForwarding(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $forwarding = GoogleWorkspaceService::getForwarding($wu['email']);
+        Response::json($forwarding);
+    }
+
+    public function setForwarding(Request $req): void
+    {
+        $id          = (int) $req->param('id');
+        $enabled     = (bool) ($req->body['enabled'] ?? false);
+        $forwardTo   = strtolower(trim((string) ($req->body['forward_to'] ?? '')));
+        $disposition = (string) ($req->body['disposition'] ?? 'leaveInInbox');
+
+        if ($enabled && !filter_var($forwardTo, FILTER_VALIDATE_EMAIL)) {
+            Response::error('Valid forwarding email address required.', 400);
+        }
+
+        $allowed = ['leaveInInbox', 'archive', 'trash', 'markRead'];
+        if (!in_array($disposition, $allowed, true)) $disposition = 'leaveInInbox';
+
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::setForwarding($wu['email'], $enabled, $forwardTo, $disposition);
+        AuditService::log('FORWARDING_UPDATED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], "enabled=$enabled forwardTo=$forwardTo", $req->ip);
+        Response::json(['message' => $enabled ? "Forwarding enabled to $forwardTo." : 'Forwarding disabled.']);
+    }
+
+    // ── 2SV Backup Codes ──────────────────────────────────────────────────────
+
+    public function getBackupCodes(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $codes = GoogleWorkspaceService::listBackupCodes($wu['email']);
+        Response::json(['codes' => $codes]);
+    }
+
+    public function requestGenerateBackupCodes(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne(
+            'SELECT wu.*, be.contact_email, be.deletion_approver_emails
+             FROM workspace_users wu JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $this->sendActionOtp($req, $wu, 'generate-backup-codes', 'Generate Backup Codes OTP');
+        AuditService::log('BACKUP_CODES_OTP_SENT', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'generate', $req->ip);
+    }
+
+    public function confirmGenerateBackupCodes(Request $req): void
+    {
+        $id  = (int) $req->param('id');
+        $otp = trim((string) ($req->body['otp'] ?? ''));
+        if (!$otp) Response::error('OTP is required.', 422);
+
+        $wu = $this->verifyActionOtp($id, 'generate-backup-codes', $otp);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::generateBackupCodes($wu['email']);
+        $this->clearActionOtp($id);
+
+        AuditService::log('BACKUP_CODES_GENERATED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'OTP verified', $req->ip);
+        Response::json(['message' => 'New backup codes generated. Existing codes are now invalid.']);
+    }
+
+    public function requestInvalidateBackupCodes(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne(
+            'SELECT wu.*, be.contact_email, be.deletion_approver_emails
+             FROM workspace_users wu JOIN billing_entities be ON be.id = wu.billing_entity_id
+             WHERE wu.id = :id',
+            [':id' => $id]
+        );
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $this->sendActionOtp($req, $wu, 'invalidate-backup-codes', 'Invalidate Backup Codes OTP');
+        AuditService::log('BACKUP_CODES_OTP_SENT', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'invalidate', $req->ip);
+    }
+
+    public function confirmInvalidateBackupCodes(Request $req): void
+    {
+        $id  = (int) $req->param('id');
+        $otp = trim((string) ($req->body['otp'] ?? ''));
+        if (!$otp) Response::error('OTP is required.', 422);
+
+        $wu = $this->verifyActionOtp($id, 'invalidate-backup-codes', $otp);
+        $this->guardBillingEntity($req, $wu);
+
+        GoogleWorkspaceService::invalidateBackupCodes($wu['email']);
+        $this->clearActionOtp($id);
+
+        AuditService::log('BACKUP_CODES_INVALIDATED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'OTP verified', $req->ip);
+        Response::json(['message' => 'All backup codes have been invalidated.']);
+    }
+
+    // ── OOO / Vacation Responder ──────────────────────────────────────────────
+
+    public function getVacation(Request $req): void
+    {
+        $id = (int) $req->param('id');
+        $wu = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $vacation = GoogleWorkspaceService::getVacation($wu['email']);
+        Response::json($vacation);
+    }
+
+    public function setVacation(Request $req): void
+    {
+        $id   = (int) $req->param('id');
+        $body = $req->body;
+        $wu   = Database::queryOne('SELECT id, email, billing_entity_id FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$wu) Response::error('Not found.', 404);
+        $this->guardBillingEntity($req, $wu);
+
+        $data = [
+            'enabled'          => (bool)   ($body['enabled']          ?? false),
+            'subject'          => (string)  ($body['subject']          ?? ''),
+            'body'             => (string)  ($body['body']             ?? ''),
+            'start_time_epoch' => !empty($body['start_time_epoch']) ? (int)$body['start_time_epoch'] : null,
+            'end_time_epoch'   => !empty($body['end_time_epoch'])   ? (int)$body['end_time_epoch']   : null,
+        ];
+
+        GoogleWorkspaceService::setVacation($wu['email'], $data);
+        AuditService::log('VACATION_UPDATED', $req->user['userType'], $req->user['userId'], $req->user['name'] ?? '', $req->user['role'], $wu['email'], 'enabled=' . ($data['enabled'] ? 'true' : 'false'), $req->ip);
+        Response::json(['message' => $data['enabled'] ? 'Out-of-office enabled.' : 'Out-of-office disabled.']);
     }
 }
