@@ -115,14 +115,54 @@ class WorkspaceUserController
 
     public function update(Request $req): void
     {
-        $id = (int) $req->param('id');
-        $b  = $req->body;
-        $sets = []; $params = [':id' => $id];
-        foreach (['first_name','last_name'] as $f) {
-            if (isset($b[$f])) { $sets[] = "$f = :$f"; $params[":$f"] = $b[$f]; }
+        $id   = (int) $req->param('id');
+        $user = Database::queryOne('SELECT * FROM workspace_users WHERE id = :id', [':id' => $id]);
+        if (!$user) Response::error('User not found', 404);
+
+        if ($req->user['role'] === 'domain_owner') {
+            $pu = Database::queryOne('SELECT billing_entity_id FROM portal_users WHERE id = :id', [':id' => $req->user['userId']]);
+            if ((int)$user['billing_entity_id'] !== (int)($pu['billing_entity_id'] ?? 0)) Response::error('Not found', 404);
         }
-        if (!$sets) Response::error('Nothing to update.', 400);
-        Database::execute('UPDATE workspace_users SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
+
+        $b = $req->body;
+        $googleData = [];
+        $dbSets = []; $dbParams = [':id' => $id];
+
+        foreach (['first_name', 'last_name'] as $f) {
+            if (isset($b[$f]) && trim($b[$f]) !== '') {
+                $googleData[$f] = trim($b[$f]);
+                $dbSets[]       = "$f = :$f";
+                $dbParams[":$f"] = trim($b[$f]);
+            }
+        }
+
+        $newEmail = isset($b['new_email']) ? strtolower(trim($b['new_email'])) : null;
+        if ($newEmail && $newEmail !== $user['email']) {
+            $oldDomain = explode('@', $user['email'])[1] ?? '';
+            $newDomain = explode('@', $newEmail)[1] ?? '';
+            if ($oldDomain !== $newDomain) Response::error('Username can only be changed within the same domain.', 422);
+            if (Database::queryOne('SELECT id FROM workspace_users WHERE email = :e AND id != :id', [':e' => $newEmail, ':id' => $id])) {
+                Response::error('Email already in use.', 422);
+            }
+            $googleData['new_email'] = $newEmail;
+            $dbSets[]               = 'email = :email';
+            $dbParams[':email']     = $newEmail;
+        }
+
+        if (array_key_exists('recovery_email', $b)) $googleData['recovery_email'] = (string)$b['recovery_email'];
+        if (array_key_exists('phone', $b))          $googleData['phone']          = (string)$b['phone'];
+
+        if (!$googleData && !$dbSets) Response::error('Nothing to update.', 400);
+
+        if ($googleData) GoogleWorkspaceService::updateUser($user['email'], $googleData);
+
+        if ($dbSets) {
+            Database::execute('UPDATE workspace_users SET ' . implode(', ', $dbSets) . ' WHERE id = :id', $dbParams);
+        }
+
+        AuditService::log('USER_UPDATED', $req->user['userType'], $req->user['userId'], '', $req->user['role'],
+            $user['email'], implode(', ', array_keys($googleData ?: [])), $req->ip);
+
         Response::json(['message' => 'Updated.']);
     }
 

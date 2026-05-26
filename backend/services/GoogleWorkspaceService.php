@@ -261,6 +261,53 @@ class GoogleWorkspaceService
     }
 
     /**
+     * Update user properties in Google Workspace.
+     * $data keys: new_email, first_name, last_name, recovery_email, phone
+     */
+    public static function updateUser(string $currentEmail, array $data): bool
+    {
+        if (!self::isManaged($currentEmail)) {
+            Logger::warn("[GWS] updateUser blocked — $currentEmail not in LDIS domains");
+            return false;
+        }
+        try {
+            $service = self::getService();
+            $patch   = new Google_Service_Directory_User();
+
+            if (!empty($data['new_email'])) {
+                if (!self::isManaged($data['new_email'])) throw new \RuntimeException('New email domain not managed.');
+                $patch->setPrimaryEmail($data['new_email']);
+            }
+            if (!empty($data['first_name']) || !empty($data['last_name'])) {
+                $name = new Google_Service_Directory_UserName();
+                if (!empty($data['first_name'])) $name->setGivenName($data['first_name']);
+                if (!empty($data['last_name']))  $name->setFamilyName($data['last_name']);
+                $patch->setName($name);
+            }
+            if (array_key_exists('recovery_email', $data)) {
+                $patch->setRecoveryEmail($data['recovery_email']);
+            }
+            if (array_key_exists('phone', $data)) {
+                if ($data['phone']) {
+                    $phone = new Google_Service_Directory_UserPhone();
+                    $phone->setValue($data['phone']);
+                    $phone->setType('mobile');
+                    $patch->setPhones([$phone]);
+                } else {
+                    $patch->setPhones([]);
+                }
+            }
+
+            $service->users->patch($currentEmail, $patch);
+            Logger::info("[GWS] updateUser OK → $currentEmail");
+            return true;
+        } catch (Throwable $e) {
+            Logger::error("[GWS] updateUser FAILED → $currentEmail: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
      * Check 2FA enrollment status.
      */
     public static function get2FAStatus(string $email): ?bool
